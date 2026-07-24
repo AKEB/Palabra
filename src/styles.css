@@ -844,6 +844,16 @@ select:focus {
   margin-bottom: 16px;
 }
 
+.list-tools {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.list-tools input {
+  display: none;
+}
+
 .confirm-delete {
   display: grid;
   gap: 10px;

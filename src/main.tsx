@@ -7,7 +7,6 @@ type Word = {
   listId: string;
   ru: string;
   es: string;
-  ruPronunciation?: string;
   esPronunciation?: string;
   updatedAt?: string;
 };
@@ -107,6 +106,83 @@ function normalizeAnswer(value: string) {
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[¿?¡!.,;:]/g, "")
     .replace(/\s+/g, " ");
+}
+
+function escapeCsvField(value: string) {
+  if (!/[",\n\r]/.test(value)) return value;
+  return `"${value.replace(/"/g, '""')}"`;
+}
+
+function wordsToCsv(words: Word[]) {
+  const rows = [
+    ["ru", "es", "esPronunciation"],
+    ...words.map((word) => [word.ru, word.es, word.esPronunciation ?? ""]),
+  ];
+  return rows.map((row) => row.map(escapeCsvField).join(",")).join("\n");
+}
+
+function parseCsv(text: string) {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let quoted = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const next = text[index + 1];
+    if (quoted) {
+      if (char === '"' && next === '"') {
+        field += '"';
+        index += 1;
+      } else if (char === '"') {
+        quoted = false;
+      } else {
+        field += char;
+      }
+    } else if (char === '"') {
+      quoted = true;
+    } else if (char === ",") {
+      row.push(field);
+      field = "";
+    } else if (char === "\n") {
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = "";
+    } else if (char !== "\r") {
+      field += char;
+    }
+  }
+  row.push(field);
+  rows.push(row);
+  return rows.filter((item) => item.some((value) => value.trim()));
+}
+
+function csvRowsToWordDrafts(text: string) {
+  const rows = parseCsv(text.replace(/^\uFEFF/, ""));
+  const first = rows[0]?.map((value) => value.trim().toLowerCase());
+  const hasHeader = first?.[0] === "ru" && first?.[1] === "es";
+  const esPronunciationIndex = hasHeader && first ? first.indexOf("espronunciation") : -1;
+  return rows.slice(hasHeader ? 1 : 0)
+    .map((row) => ({
+      ru: (row[0] ?? "").trim(),
+      es: (row[1] ?? "").trim(),
+      esPronunciation: (row[esPronunciationIndex >= 0 ? esPronunciationIndex : row.length >= 4 ? 3 : 2] ?? "").trim(),
+    }))
+    .filter((item) => item.ru && item.es);
+}
+
+function downloadTextFile(filename: string, text: string) {
+  const blob = new Blob([`\uFEFF${text}`], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function safeFilename(value: string) {
+  return value.trim().toLowerCase().replace(/[^a-z0-9а-яё]+/gi, "-").replace(/^-+|-+$/g, "") || "palabra-list";
 }
 
 function mergeProgress(local: Record<string, Progress>, remote: Record<string, Progress>) {
@@ -716,7 +792,7 @@ function Study({ lists, selectedLists, setSelectedLists, mode, setMode, progress
             >
               <span className="card-counter">{currentIndex + 1} / {session.length}</span>
               <span className="card-word">{!flipped ? (mode === "flash-ru-es" ? current.ru : current.es) : (mode === "flash-ru-es" ? current.es : current.ru)}</span>
-              {flipped && <span className="pronunciation">{mode === "flash-ru-es" ? current.esPronunciation : current.ruPronunciation}</span>}
+              {flipped && mode === "flash-ru-es" && current.esPronunciation && <span className="pronunciation">{current.esPronunciation}</span>}
               <span className="hint">Нажмите, чтобы перевернуть</span>
             </button>
             <div className="actions">
@@ -794,10 +870,11 @@ function Admin({ lists, token, online, progress, disabledWordIds, persistLists, 
   const [activeListId, setActiveListId] = useState(lists[0]?.id ?? "");
   const [draftList, setDraftList] = useState({ title: "", icon: "📚", color: "#087d86" });
   const [listEdit, setListEdit] = useState({ title: "", icon: "📚" });
-  const [word, setWord] = useState({ ru: "", es: "", ruPronunciation: "", esPronunciation: "" });
+  const [word, setWord] = useState({ ru: "", es: "", esPronunciation: "" });
   const [editingWordId, setEditingWordId] = useState("");
-  const [wordEdit, setWordEdit] = useState({ ru: "", es: "", ruPronunciation: "", esPronunciation: "" });
+  const [wordEdit, setWordEdit] = useState({ ru: "", es: "", esPronunciation: "" });
   const [confirmDeleteList, setConfirmDeleteList] = useState(false);
+  const importInputRef = useRef<HTMLInputElement | null>(null);
   const active = lists.find((list) => list.id === activeListId) ?? lists[0];
   const disabledWords = new Set(disabledWordIds);
 
@@ -838,12 +915,37 @@ function Admin({ lists, token, online, progress, disabledWordIds, persistLists, 
     setNotice("Список удален");
   }
 
+  function exportActiveList() {
+    if (!active) return;
+    downloadTextFile(`${safeFilename(active.title)}.csv`, wordsToCsv(active.words));
+    setNotice("CSV скачан");
+  }
+
+  async function importWordsFromCsv(file: File) {
+    if (!online || !active) return;
+    const drafts = csvRowsToWordDrafts(await file.text());
+    if (!drafts.length) {
+      setNotice("В CSV не нашлось слов для импорта");
+      return;
+    }
+    const created: Word[] = [];
+    for (let index = 0; index < drafts.length; index += 10) {
+      const batch = drafts.slice(index, index + 10);
+      const wordsBatch = await Promise.all(batch.map((item) => (
+        api<Word>(`/api/lists/${active.id}/words`, token, { method: "POST", body: JSON.stringify(item) })
+      )));
+      created.push(...wordsBatch);
+    }
+    await persistLists(lists.map((list) => list.id === active.id ? { ...list, words: [...list.words, ...created] } : list));
+    setNotice(`Импортировано слов: ${created.length}`);
+  }
+
   async function saveWord(event: React.FormEvent) {
     event.preventDefault();
     if (!online || !active) return;
     const created = await api<Word>(`/api/lists/${active.id}/words`, token, { method: "POST", body: JSON.stringify(word) });
     await persistLists(lists.map((list) => list.id === active.id ? { ...list, words: [...list.words, created] } : list));
-    setWord({ ru: "", es: "", ruPronunciation: "", esPronunciation: "" });
+    setWord({ ru: "", es: "", esPronunciation: "" });
     setNotice("Слово добавлено");
   }
 
@@ -852,14 +954,13 @@ function Admin({ lists, token, online, progress, disabledWordIds, persistLists, 
     setWordEdit({
       ru: item.ru,
       es: item.es,
-      ruPronunciation: item.ruPronunciation ?? "",
       esPronunciation: item.esPronunciation ?? "",
     });
   }
 
   function cancelWordEdit() {
     setEditingWordId("");
-    setWordEdit({ ru: "", es: "", ruPronunciation: "", esPronunciation: "" });
+    setWordEdit({ ru: "", es: "", esPronunciation: "" });
   }
 
   async function updateWord(event: React.FormEvent) {
@@ -911,6 +1012,20 @@ function Admin({ lists, token, online, progress, disabledWordIds, persistLists, 
                 <input value={listEdit.title} onChange={(event) => setListEdit({ ...listEdit, title: event.target.value })} placeholder="Название списка" required />
                 <button className="ghost" disabled={!online}>Сохранить</button>
               </form>
+              <div className="list-tools">
+                <button className="ghost" type="button" onClick={exportActiveList} disabled={!active?.words.length}>Экспорт CSV</button>
+                <button className="ghost" type="button" onClick={() => importInputRef.current?.click()} disabled={!online || !active}>Импорт CSV</button>
+                <input
+                  ref={importInputRef}
+                  type="file"
+                  accept=".csv,text/csv"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    event.currentTarget.value = "";
+                    if (file) importWordsFromCsv(file).catch((error) => setNotice(error instanceof Error ? error.message : "Импорт не удался"));
+                  }}
+                />
+              </div>
               {!confirmDeleteList && (
                 <button className="danger outline wide" type="button" onClick={() => setConfirmDeleteList(true)} disabled={!online}>Удалить список</button>
               )}
@@ -937,7 +1052,6 @@ function Admin({ lists, token, online, progress, disabledWordIds, persistLists, 
                     <form className="word-edit-form" onSubmit={updateWord}>
                       <input value={wordEdit.ru} onChange={(event) => setWordEdit({ ...wordEdit, ru: event.target.value })} placeholder="Русский текст" required />
                       <input value={wordEdit.es} onChange={(event) => setWordEdit({ ...wordEdit, es: event.target.value })} placeholder="Испанский текст" required />
-                      <input value={wordEdit.ruPronunciation} onChange={(event) => setWordEdit({ ...wordEdit, ruPronunciation: event.target.value })} placeholder="Произношение RU" />
                       <input value={wordEdit.esPronunciation} onChange={(event) => setWordEdit({ ...wordEdit, esPronunciation: event.target.value })} placeholder="Произношение ES" />
                       <div className="word-edit-actions">
                         <button className="primary" disabled={!online}>Сохранить</button>
@@ -946,7 +1060,7 @@ function Admin({ lists, token, online, progress, disabledWordIds, persistLists, 
                     </form>
                   ) : (
                     <>
-                      <div><b>{item.ru}</b><small>{item.ruPronunciation}</small></div>
+                      <div><b>{item.ru}</b></div>
                       <div><b>{item.es}</b><small>{item.esPronunciation}</small></div>
                       <div className="word-stats">
                         <span className="ok">✓ {correctTotal(itemProgress)}</span>
@@ -975,7 +1089,6 @@ function Admin({ lists, token, online, progress, disabledWordIds, persistLists, 
           <h3>Добавить слово</h3>
           <input value={word.ru} onChange={(event) => setWord({ ...word, ru: event.target.value })} placeholder="Русский текст" required />
           <input value={word.es} onChange={(event) => setWord({ ...word, es: event.target.value })} placeholder="Испанский текст" required />
-          <input value={word.ruPronunciation} onChange={(event) => setWord({ ...word, ruPronunciation: event.target.value })} placeholder="Произношение RU, если нужно" />
           <input value={word.esPronunciation} onChange={(event) => setWord({ ...word, esPronunciation: event.target.value })} placeholder="Произношение ES, если нужно" />
           <button className="primary wide" disabled={!online || !active}>Добавить</button>
         </form>

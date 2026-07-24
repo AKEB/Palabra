@@ -18,10 +18,10 @@ const seedLists = [
     icon: "🍔",
     color: "#ff5a45",
     words: [
-      ["яблоко", "la manzana", "", "ла мансана"],
-      ["молоко", "la leche", "", "ла лече"],
-      ["хлеб", "el pan", "", "эль пан"],
-      ["Мне нужен кофе", "Necesito un cafe", "", "несесито ун кафе"],
+      ["яблоко", "la manzana", "ла мансана"],
+      ["молоко", "la leche", "ла лече"],
+      ["хлеб", "el pan", "эль пан"],
+      ["Мне нужен кофе", "Necesito un cafe", "несесито ун кафе"],
     ],
   },
   {
@@ -29,9 +29,9 @@ const seedLists = [
     icon: "✈️",
     color: "#087d86",
     words: [
-      ["аэропорт", "el aeropuerto", "", "эль аэропуэрто"],
-      ["Где вокзал?", "Donde esta la estacion?", "", "донде эста ла эстасьон"],
-      ["билет", "el billete", "", "эль бийете"],
+      ["аэропорт", "el aeropuerto", "эль аэропуэрто"],
+      ["Где вокзал?", "Donde esta la estacion?", "донде эста ла эстасьон"],
+      ["билет", "el billete", "эль бийете"],
     ],
   },
 ];
@@ -77,7 +77,6 @@ async function initDb() {
       list_id uuid not null references word_lists(id) on delete cascade,
       ru text not null,
       es text not null,
-      ru_pronunciation text not null default '',
       es_pronunciation text not null default '',
       updated_at timestamptz not null default now()
     );
@@ -111,6 +110,7 @@ async function initDb() {
   await pool.query("alter table progress add column if not exists mastery_written_wrong integer not null default 0");
   await pool.query("alter table progress add column if not exists mastery_oral_correct integer not null default 0");
   await pool.query("alter table progress add column if not exists mastery_oral_wrong integer not null default 0");
+  await pool.query("alter table words drop column if exists ru_pronunciation");
 }
 
 async function handleApi(request, response, url) {
@@ -265,8 +265,8 @@ async function handleApi(request, response, url) {
     const es = String(body.es || "").trim();
     if (!ru || !es) return sendJson(response, 400, { error: "Нужны русский и испанский тексты" });
     const { rows } = await pool.query(
-      "insert into words (id, list_id, ru, es, ru_pronunciation, es_pronunciation) values ($1, $2, $3, $4, $5, $6) returning *",
-      [randomUUID(), listId, ru, es, String(body.ruPronunciation || ""), String(body.esPronunciation || "")]
+      "insert into words (id, list_id, ru, es, es_pronunciation) values ($1, $2, $3, $4, $5) returning *",
+      [randomUUID(), listId, ru, es, String(body.esPronunciation || "")]
     );
     await pool.query("update word_lists set updated_at = now() where id = $1", [listId]);
     return sendJson(response, 201, mapWord(rows[0]));
@@ -283,11 +283,11 @@ async function handleApi(request, response, url) {
     const { rows } = await pool.query(
       `
         update words
-        set ru = $1, es = $2, ru_pronunciation = $3, es_pronunciation = $4, updated_at = now()
-        where id = $5
+        set ru = $1, es = $2, es_pronunciation = $3, updated_at = now()
+        where id = $4
         returning *
       `,
-      [ru, es, String(body.ruPronunciation || ""), String(body.esPronunciation || ""), wordId]
+      [ru, es, String(body.esPronunciation || ""), wordId]
     );
     await pool.query("update word_lists set updated_at = now() where id = $1", [rows[0].list_id]);
     return sendJson(response, 200, mapWord(rows[0]));
@@ -338,8 +338,8 @@ async function seedUser(userId, client = pool) {
     await client.query("insert into word_lists (id, user_id, title, icon, color) values ($1, $2, $3, $4, $5)", [listId, userId, list.title, list.icon, list.color]);
     for (const word of list.words) {
       await client.query(
-        "insert into words (id, list_id, ru, es, ru_pronunciation, es_pronunciation) values ($1, $2, $3, $4, $5, $6)",
-        [randomUUID(), listId, word[0], word[1], word[2], word[3]]
+        "insert into words (id, list_id, ru, es, es_pronunciation) values ($1, $2, $3, $4, $5)",
+        [randomUUID(), listId, word[0], word[1], word[2]]
       );
     }
   }
@@ -433,7 +433,6 @@ function mapWord(row) {
     listId: row.list_id,
     ru: row.ru,
     es: row.es,
-    ruPronunciation: row.ru_pronunciation,
     esPronunciation: row.es_pronunciation,
     updatedAt: row.updated_at,
   };
