@@ -27,15 +27,22 @@ type Progress = {
   unknownCount: number;
   correctCount: number;
   wrongCount: number;
+  masteryWrittenCorrect?: number;
+  masteryWrittenWrong?: number;
+  masteryOralCorrect?: number;
+  masteryOralWrong?: number;
   lastResult?: string;
   activityDates?: string[];
   updatedAt: string;
 };
 
+type PracticeKind = "oral" | "written-es" | "ignored";
+
 type ProgressEvent = {
   id: string;
   wordId: string;
   result: "known" | "unknown" | "correct" | "wrong";
+  practiceKind?: PracticeKind;
   createdAt: string;
 };
 
@@ -122,6 +129,10 @@ function applyEventsToProgress(progress: Record<string, Progress>, events: Progr
       unknownCount: 0,
       correctCount: 0,
       wrongCount: 0,
+      masteryWrittenCorrect: 0,
+      masteryWrittenWrong: 0,
+      masteryOralCorrect: 0,
+      masteryOralWrong: 0,
       updatedAt: event.createdAt,
     };
     next[event.wordId] = {
@@ -130,6 +141,10 @@ function applyEventsToProgress(progress: Record<string, Progress>, events: Progr
       unknownCount: current.unknownCount + (event.result === "unknown" ? 1 : 0),
       correctCount: current.correctCount + (event.result === "correct" ? 1 : 0),
       wrongCount: current.wrongCount + (event.result === "wrong" ? 1 : 0),
+      masteryWrittenCorrect: (current.masteryWrittenCorrect ?? 0) + (event.practiceKind === "written-es" && event.result === "correct" ? 1 : 0),
+      masteryWrittenWrong: (current.masteryWrittenWrong ?? 0) + (event.practiceKind === "written-es" && event.result === "wrong" ? 1 : 0),
+      masteryOralCorrect: (current.masteryOralCorrect ?? 0) + (event.practiceKind === "oral" && event.result === "known" ? 1 : 0),
+      masteryOralWrong: (current.masteryOralWrong ?? 0) + (event.practiceKind === "oral" && event.result === "unknown" ? 1 : 0),
       lastResult: event.result,
       activityDates: Array.from(new Set([...(current.activityDates ?? []), dateKey(new Date(event.createdAt))])),
       updatedAt: event.createdAt,
@@ -159,6 +174,29 @@ function correctTotal(item?: Progress) {
 
 function wrongTotal(item?: Progress) {
   return (item?.unknownCount ?? 0) + (item?.wrongCount ?? 0);
+}
+
+function getPracticeKind(mode: Mode): PracticeKind {
+  if (mode === "type-ru-es") return "written-es";
+  if (mode === "flash-ru-es" || mode === "flash-es-ru") return "oral";
+  return "ignored";
+}
+
+function isMasteredForAutoDisable(item?: Progress) {
+  const writtenGap = (item?.masteryWrittenCorrect ?? 0) - (item?.masteryWrittenWrong ?? 0);
+  const oralGap = (item?.masteryOralCorrect ?? 0) - (item?.masteryOralWrong ?? 0);
+  return writtenGap >= 20 && oralGap >= 20;
+}
+
+function resetMasteryCounters(item: Progress): Progress {
+  return {
+    ...item,
+    masteryWrittenCorrect: 0,
+    masteryWrittenWrong: 0,
+    masteryOralCorrect: 0,
+    masteryOralWrong: 0,
+    updatedAt: now(),
+  };
 }
 
 function userCacheKey(email: string, key: string) {
@@ -316,12 +354,12 @@ function App() {
     }
   }
 
-  async function mark(wordId: string, result: ProgressEvent["result"]) {
-    const event: ProgressEvent = { id: uid("event"), wordId, result, createdAt: now() };
+  async function mark(wordId: string, result: ProgressEvent["result"], practiceKind: PracticeKind) {
+    const event: ProgressEvent = { id: uid("event"), wordId, result, practiceKind, createdAt: now() };
     const nextQueue = [...queue, event];
     const nextProgress = applyEventsToProgress(progress, [event]);
     await persistProgress(nextProgress);
-    if (correctTotal(nextProgress[wordId]) >= 30 && !disabledWordIds.includes(wordId)) {
+    if (isMasteredForAutoDisable(nextProgress[wordId]) && !disabledWordIds.includes(wordId)) {
       await persistDisabledWordIds([...disabledWordIds, wordId]);
     }
     await persistQueue(nextQueue);
@@ -331,6 +369,9 @@ function App() {
   async function toggleWordDisabled(wordId: string, disabled: boolean) {
     const next = disabled ? Array.from(new Set([...disabledWordIds, wordId])) : disabledWordIds.filter((id) => id !== wordId);
     await api(`/api/words/${wordId}/disabled`, token, { method: "POST", body: JSON.stringify({ disabled }) });
+    if (!disabled && progress[wordId]) {
+      await persistProgress({ ...progress, [wordId]: resetMasteryCounters(progress[wordId]) });
+    }
     await persistDisabledWordIds(next);
     setNotice(disabled ? "Слово выключено из тренировки" : "Слово возвращено в тренировку");
   }
@@ -460,7 +501,7 @@ function Study({ lists, selectedLists, setSelectedLists, mode, setMode, progress
   setMode: (mode: Mode) => void;
   progress: Record<string, Progress>;
   disabledWordIds: string[];
-  mark: (wordId: string, result: ProgressEvent["result"]) => Promise<void>;
+  mark: (wordId: string, result: ProgressEvent["result"], practiceKind: PracticeKind) => Promise<void>;
 }) {
   const disabledWords = useMemo(() => new Set(disabledWordIds), [disabledWordIds]);
   const selectedAllWords = useMemo(() => lists.filter((list) => selectedLists.includes(list.id)).flatMap((list) => list.words), [lists, selectedLists]);
@@ -520,10 +561,11 @@ function Study({ lists, selectedLists, setSelectedLists, mode, setMode, progress
   const dailyDone = Math.min(dailyGoal, selectedProgress.filter((item) => item.activityDates?.includes(today)).length);
   const currentMode = MODES.find((item) => item.id === mode)!;
   const typeMode = mode.startsWith("type");
+  const practiceKind = getPracticeKind(mode);
 
   function nextKnown() {
     if (!current) return;
-    mark(current.id, typeMode ? "correct" : "known");
+    mark(current.id, typeMode ? "correct" : "known", practiceKind);
     const next = session.filter((id) => id !== current.id);
     setSession(next);
     setCurrentId(next[Math.floor(Math.random() * next.length)] ?? "");
@@ -535,7 +577,7 @@ function Study({ lists, selectedLists, setSelectedLists, mode, setMode, progress
 
   function nextUnknown() {
     if (!current) return;
-    mark(current.id, typeMode ? "wrong" : "unknown");
+    mark(current.id, typeMode ? "wrong" : "unknown", practiceKind);
     const others = session.filter((id) => id !== current.id);
     const index = others.length ? Math.floor(Math.random() * (others.length + 1)) : 0;
     const next = [...others.slice(0, index), current.id, ...others.slice(index)];
@@ -868,7 +910,7 @@ function Admin({ lists, token, online, progress, disabledWordIds, persistLists, 
             {active?.words.map((item) => {
               const itemProgress = progress[item.id];
               const disabled = disabledWords.has(item.id);
-              const mastered = correctTotal(itemProgress) >= 30;
+              const mastered = isMasteredForAutoDisable(itemProgress);
               const editing = editingWordId === item.id;
               return (
                 <div className={disabled ? "word-row disabled" : "word-row"} key={item.id}>

@@ -89,6 +89,10 @@ async function initDb() {
       unknown_count integer not null default 0,
       correct_count integer not null default 0,
       wrong_count integer not null default 0,
+      mastery_written_correct integer not null default 0,
+      mastery_written_wrong integer not null default 0,
+      mastery_oral_correct integer not null default 0,
+      mastery_oral_wrong integer not null default 0,
       last_result text not null default '',
       activity_dates jsonb not null default '[]'::jsonb,
       updated_at timestamptz not null default now(),
@@ -103,6 +107,10 @@ async function initDb() {
     );
   `);
   await pool.query("alter table progress add column if not exists activity_dates jsonb not null default '[]'::jsonb");
+  await pool.query("alter table progress add column if not exists mastery_written_correct integer not null default 0");
+  await pool.query("alter table progress add column if not exists mastery_written_wrong integer not null default 0");
+  await pool.query("alter table progress add column if not exists mastery_oral_correct integer not null default 0");
+  await pool.query("alter table progress add column if not exists mastery_oral_wrong integer not null default 0");
 }
 
 async function handleApi(request, response, url) {
@@ -155,16 +163,35 @@ async function handleApi(request, response, url) {
     for (const event of events) {
       const result = String(event.result || "");
       if (!["known", "unknown", "correct", "wrong"].includes(result)) continue;
+      const practiceKind = String(event.practiceKind || "");
       const activityDate = new Date(event.createdAt || Date.now()).toISOString().slice(0, 10);
       await pool.query(
         `
-          insert into progress (user_id, word_id, known_count, unknown_count, correct_count, wrong_count, last_result, activity_dates, updated_at)
-          values ($1, $2, $3, $4, $5, $6, $7, jsonb_build_array($8::text), now())
+          insert into progress (
+            user_id,
+            word_id,
+            known_count,
+            unknown_count,
+            correct_count,
+            wrong_count,
+            mastery_written_correct,
+            mastery_written_wrong,
+            mastery_oral_correct,
+            mastery_oral_wrong,
+            last_result,
+            activity_dates,
+            updated_at
+          )
+          values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, jsonb_build_array($12::text), now())
           on conflict (user_id, word_id) do update set
             known_count = progress.known_count + excluded.known_count,
             unknown_count = progress.unknown_count + excluded.unknown_count,
             correct_count = progress.correct_count + excluded.correct_count,
             wrong_count = progress.wrong_count + excluded.wrong_count,
+            mastery_written_correct = progress.mastery_written_correct + excluded.mastery_written_correct,
+            mastery_written_wrong = progress.mastery_written_wrong + excluded.mastery_written_wrong,
+            mastery_oral_correct = progress.mastery_oral_correct + excluded.mastery_oral_correct,
+            mastery_oral_wrong = progress.mastery_oral_wrong + excluded.mastery_oral_wrong,
             last_result = excluded.last_result,
             activity_dates = (
               select jsonb_agg(distinct value)
@@ -172,7 +199,20 @@ async function handleApi(request, response, url) {
             ),
             updated_at = now()
         `,
-        [user.sub, event.wordId, result === "known" ? 1 : 0, result === "unknown" ? 1 : 0, result === "correct" ? 1 : 0, result === "wrong" ? 1 : 0, result, activityDate]
+        [
+          user.sub,
+          event.wordId,
+          result === "known" ? 1 : 0,
+          result === "unknown" ? 1 : 0,
+          result === "correct" ? 1 : 0,
+          result === "wrong" ? 1 : 0,
+          practiceKind === "written-es" && result === "correct" ? 1 : 0,
+          practiceKind === "written-es" && result === "wrong" ? 1 : 0,
+          practiceKind === "oral" && result === "known" ? 1 : 0,
+          practiceKind === "oral" && result === "unknown" ? 1 : 0,
+          result,
+          activityDate,
+        ]
       ).catch(() => undefined);
       await disableMasteredWord(user.sub, event.wordId).catch(() => undefined);
     }
@@ -272,6 +312,19 @@ async function handleApi(request, response, url) {
       await pool.query("insert into disabled_words (user_id, word_id) values ($1, $2) on conflict do nothing", [user.sub, wordId]);
     } else {
       await pool.query("delete from disabled_words where user_id = $1 and word_id = $2", [user.sub, wordId]);
+      await pool.query(
+        `
+          update progress
+          set
+            mastery_written_correct = 0,
+            mastery_written_wrong = 0,
+            mastery_oral_correct = 0,
+            mastery_oral_wrong = 0,
+            updated_at = now()
+          where user_id = $1 and word_id = $2
+        `,
+        [user.sub, wordId]
+      );
     }
     return sendJson(response, 200, { wordId, disabled });
   }
@@ -311,6 +364,10 @@ async function getUserData(userId) {
       unknownCount: item.unknown_count,
       correctCount: item.correct_count,
       wrongCount: item.wrong_count,
+      masteryWrittenCorrect: item.mastery_written_correct,
+      masteryWrittenWrong: item.mastery_written_wrong,
+      masteryOralCorrect: item.mastery_oral_correct,
+      masteryOralWrong: item.mastery_oral_wrong,
       lastResult: item.last_result,
       activityDates: Array.isArray(item.activity_dates) ? item.activity_dates : [],
       updatedAt: item.updated_at,
@@ -352,10 +409,16 @@ async function ownsWord(userId, wordId) {
 
 async function disableMasteredWord(userId, wordId) {
   const { rows } = await pool.query(
-    "select known_count + correct_count as correct_total from progress where user_id = $1 and word_id = $2",
+    `
+      select
+        mastery_written_correct - mastery_written_wrong as written_gap,
+        mastery_oral_correct - mastery_oral_wrong as oral_gap
+      from progress
+      where user_id = $1 and word_id = $2
+    `,
     [userId, wordId]
   );
-  if (Number(rows[0]?.correct_total ?? 0) >= 30) {
+  if (Number(rows[0]?.written_gap ?? 0) >= 20 && Number(rows[0]?.oral_gap ?? 0) >= 20) {
     await pool.query("insert into disabled_words (user_id, word_id) values ($1, $2) on conflict do nothing", [userId, wordId]);
   }
 }
