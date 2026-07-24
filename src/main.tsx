@@ -176,6 +176,27 @@ function wrongTotal(item?: Progress) {
   return (item?.unknownCount ?? 0) + (item?.wrongCount ?? 0);
 }
 
+function progressGap(item?: Progress) {
+  return correctTotal(item) - wrongTotal(item);
+}
+
+function weightedStudyOrder(words: Word[], progress: Record<string, Progress>) {
+  if (!words.length) return [];
+  const gaps = words.map((word) => progressGap(progress[word.id]));
+  const strongestGap = Math.max(...gaps, 0);
+  return words
+    .map((word) => {
+      const weakPriority = Math.min(40, strongestGap - progressGap(progress[word.id]));
+      const weight = 1 + weakPriority;
+      return {
+        id: word.id,
+        priority: Math.log(Math.random()) / weight,
+      };
+    })
+    .sort((left, right) => right.priority - left.priority)
+    .map((item) => item.id);
+}
+
 function getPracticeKind(mode: Mode): PracticeKind {
   if (mode === "type-ru-es") return "written-es";
   if (mode === "flash-ru-es" || mode === "flash-es-ru") return "oral";
@@ -519,7 +540,7 @@ function Study({ lists, selectedLists, setSelectedLists, mode, setMode, progress
   const modePickerRef = useRef<HTMLDivElement | null>(null);
 
   function restartSession() {
-    const ids = shuffle(words.map((word) => word.id));
+    const ids = weightedStudyOrder(words, progress);
     setSession(ids);
     setCurrentId(ids[0] ?? "");
     setFlipped(false);
@@ -568,7 +589,7 @@ function Study({ lists, selectedLists, setSelectedLists, mode, setMode, progress
     mark(current.id, typeMode ? "correct" : "known", practiceKind);
     const next = session.filter((id) => id !== current.id);
     setSession(next);
-    setCurrentId(next[Math.floor(Math.random() * next.length)] ?? "");
+    setCurrentId(next[0] ?? "");
     setFlipped(false);
     setAnswer("");
     setFeedback("");
@@ -579,10 +600,11 @@ function Study({ lists, selectedLists, setSelectedLists, mode, setMode, progress
     if (!current) return;
     mark(current.id, typeMode ? "wrong" : "unknown", practiceKind);
     const others = session.filter((id) => id !== current.id);
-    const index = others.length ? Math.floor(Math.random() * (others.length + 1)) : 0;
+    const retryWindow = Math.min(5, others.length);
+    const index = retryWindow ? 1 + Math.floor(Math.random() * retryWindow) : 0;
     const next = [...others.slice(0, index), current.id, ...others.slice(index)];
     setSession(next);
-    setCurrentId(next[Math.floor(Math.random() * next.length)] ?? current.id);
+    setCurrentId(next[0] ?? current.id);
     setFlipped(false);
     setAnswer("");
     setFeedback("");
@@ -1056,15 +1078,6 @@ function Metric({ label, value }: { label: string; value: string }) {
 
 function AppIcon() {
   return <span className="app-icon">ñ</span>;
-}
-
-function shuffle<T>(items: T[]) {
-  const next = [...items];
-  for (let index = next.length - 1; index > 0; index -= 1) {
-    const swap = Math.floor(Math.random() * (index + 1));
-    [next[index], next[swap]] = [next[swap], next[index]];
-  }
-  return next;
 }
 
 createRoot(document.getElementById("root")!).render(<App />);
