@@ -789,8 +789,8 @@ function Study({ lists, selectedLists, setSelectedLists, mode, setMode, progress
                   return;
                 }
                 const delta = event.changedTouches[0].clientX - touchStart.current;
-                if (delta < -70) nextKnown();
-                if (delta > 70) nextUnknown();
+                if (delta < -70) nextUnknown();
+                if (delta > 70) nextKnown();
                 touchStart.current = null;
               }}
             >
