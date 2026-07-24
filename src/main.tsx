@@ -441,7 +441,6 @@ function App() {
             disabledWordIds={disabledWordIds}
             persistLists={persistLists}
             toggleWordDisabled={toggleWordDisabled}
-            sync={sync}
             setNotice={setNotice}
           />
         )}
@@ -782,7 +781,7 @@ function GoalCard({ streak, learned, done, goal }: { streak: number; learned: nu
   );
 }
 
-function Admin({ lists, token, online, progress, disabledWordIds, persistLists, toggleWordDisabled, sync, setNotice }: {
+function Admin({ lists, token, online, progress, disabledWordIds, persistLists, toggleWordDisabled, setNotice }: {
   lists: WordList[];
   token: string;
   online: boolean;
@@ -790,7 +789,6 @@ function Admin({ lists, token, online, progress, disabledWordIds, persistLists, 
   disabledWordIds: string[];
   persistLists: (lists: WordList[]) => Promise<void>;
   toggleWordDisabled: (wordId: string, disabled: boolean) => Promise<void>;
-  sync: () => Promise<void>;
   setNotice: (notice: string) => void;
 }) {
   const [activeListId, setActiveListId] = useState(lists[0]?.id ?? "");
@@ -886,7 +884,6 @@ function Admin({ lists, token, online, progress, disabledWordIds, persistLists, 
           <p className="eyebrow">Админка</p>
           <h2>Списки слов</h2>
         </div>
-        <button className="ghost" onClick={sync} disabled={!online}>Синхронизировать</button>
       </div>
       {!online && <div className="offline-note">Админка доступна только онлайн. Тренировки продолжат работать без интернета.</div>}
       <div className="admin-grid">
