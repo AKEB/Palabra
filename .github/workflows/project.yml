@@ -67,3 +67,6 @@ jobs:
             -t akeb/palabra:latest \
             akeb/palabra:${{ github.ref_name }}-amd64 \
             akeb/palabra:${{ github.ref_name }}-arm64
+
+
+
