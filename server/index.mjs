@@ -210,6 +210,12 @@ async function handleApi(request, response, url) {
     return sendJson(response, 200, mapList(rows[0], data));
   }
 
+  if (request.method === "DELETE" && listMatch) {
+    const listId = listMatch[1];
+    const { rowCount } = await pool.query("delete from word_lists where id = $1 and user_id = $2", [listId, user.sub]);
+    return sendJson(response, rowCount ? 200 : 404, rowCount ? { ok: true } : { error: "Список не найден" });
+  }
+
   const listWordMatch = url.pathname.match(/^\/api\/lists\/([^/]+)\/words$/);
   if (request.method === "POST" && listWordMatch) {
     const listId = listWordMatch[1];

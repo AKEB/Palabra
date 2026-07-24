@@ -453,6 +453,13 @@ select:focus {
   box-shadow: 0 12px 24px rgba(255, 90, 69, 0.22);
 }
 
+.danger.outline {
+  border: 1px solid #ffd0c8;
+  color: #b13a2c;
+  background: #fff7f5;
+  box-shadow: none;
+}
+
 .ghost {
   border: 1px solid #dfe5e9;
   background: #fff;
@@ -824,11 +831,42 @@ select:focus {
   display: grid;
   grid-template-columns: 52px minmax(0, 1fr) auto;
   gap: 8px;
-  margin: 12px 0 16px;
+  margin: 12px 0 0;
 }
 
 .list-edit-form input {
   min-width: 0;
+}
+
+.list-settings {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.confirm-delete {
+  display: grid;
+  gap: 10px;
+  border: 1px solid #ffd0c8;
+  border-radius: 8px;
+  padding: 12px;
+  background: #fff7f5;
+}
+
+.confirm-delete p {
+  margin: 0;
+  color: #8f352b;
+  font-weight: 750;
+}
+
+.confirm-delete div {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.confirm-delete button {
+  min-height: 40px;
 }
 
 .word-form input {
@@ -1101,6 +1139,19 @@ select:focus {
 
   .word-edit-actions button {
     flex: 1;
+  }
+
+  .list-edit-form {
+    grid-template-columns: 52px minmax(0, 1fr);
+  }
+
+  .list-edit-form button {
+    grid-column: 1 / -1;
+  }
+
+  .confirm-delete div {
+    display: grid;
+    grid-template-columns: 1fr;
   }
 
   .mobile-nav {

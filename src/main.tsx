@@ -735,6 +735,7 @@ function Admin({ lists, token, online, progress, disabledWordIds, persistLists, 
   const [word, setWord] = useState({ ru: "", es: "", ruPronunciation: "", esPronunciation: "" });
   const [editingWordId, setEditingWordId] = useState("");
   const [wordEdit, setWordEdit] = useState({ ru: "", es: "", ruPronunciation: "", esPronunciation: "" });
+  const [confirmDeleteList, setConfirmDeleteList] = useState(false);
   const active = lists.find((list) => list.id === activeListId) ?? lists[0];
   const disabledWords = new Set(disabledWordIds);
 
@@ -744,6 +745,7 @@ function Admin({ lists, token, online, progress, disabledWordIds, persistLists, 
 
   useEffect(() => {
     if (active) setListEdit({ title: active.title, icon: active.icon });
+    setConfirmDeleteList(false);
   }, [active?.id, active?.title, active?.icon]);
 
   async function saveList(event: React.FormEvent) {
@@ -762,6 +764,16 @@ function Admin({ lists, token, online, progress, disabledWordIds, persistLists, 
     const updated = await api<WordList>(`/api/lists/${active.id}`, token, { method: "PATCH", body: JSON.stringify(listEdit) });
     await persistLists(lists.map((list) => list.id === active.id ? { ...updated, words: list.words } : list));
     setNotice("Список обновлен");
+  }
+
+  async function deleteList() {
+    if (!online || !active) return;
+    await api(`/api/lists/${active.id}`, token, { method: "DELETE" });
+    const nextLists = lists.filter((list) => list.id !== active.id);
+    await persistLists(nextLists);
+    setActiveListId(nextLists[0]?.id ?? "");
+    setConfirmDeleteList(false);
+    setNotice("Список удален");
   }
 
   async function saveWord(event: React.FormEvent) {
@@ -832,11 +844,25 @@ function Admin({ lists, token, online, progress, disabledWordIds, persistLists, 
         <div className="panel">
           <h3>{active ? `${active.icon} ${active.title}` : "Слова"}</h3>
           {active && (
-            <form className="list-edit-form" onSubmit={updateList}>
-              <input value={listEdit.icon} onChange={(event) => setListEdit({ ...listEdit, icon: event.target.value })} aria-label="Иконка списка" />
-              <input value={listEdit.title} onChange={(event) => setListEdit({ ...listEdit, title: event.target.value })} placeholder="Название списка" required />
-              <button className="ghost" disabled={!online}>Сохранить</button>
-            </form>
+            <div className="list-settings">
+              <form className="list-edit-form" onSubmit={updateList}>
+                <input value={listEdit.icon} onChange={(event) => setListEdit({ ...listEdit, icon: event.target.value })} aria-label="Иконка списка" />
+                <input value={listEdit.title} onChange={(event) => setListEdit({ ...listEdit, title: event.target.value })} placeholder="Название списка" required />
+                <button className="ghost" disabled={!online}>Сохранить</button>
+              </form>
+              {!confirmDeleteList && (
+                <button className="danger outline wide" type="button" onClick={() => setConfirmDeleteList(true)} disabled={!online}>Удалить список</button>
+              )}
+              {confirmDeleteList && (
+                <div className="confirm-delete">
+                  <p>Удалить список "{active.title}" вместе со всеми словами?</p>
+                  <div>
+                    <button className="danger" type="button" onClick={deleteList}>Удалить навсегда</button>
+                    <button className="ghost" type="button" onClick={() => setConfirmDeleteList(false)}>Отмена</button>
+                  </div>
+                </div>
+              )}
+            </div>
           )}
           <div className="word-table">
             {active?.words.map((item) => {
