@@ -733,6 +733,8 @@ function Admin({ lists, token, online, progress, disabledWordIds, persistLists, 
   const [draftList, setDraftList] = useState({ title: "", icon: "📚", color: "#087d86" });
   const [listEdit, setListEdit] = useState({ title: "", icon: "📚" });
   const [word, setWord] = useState({ ru: "", es: "", ruPronunciation: "", esPronunciation: "" });
+  const [editingWordId, setEditingWordId] = useState("");
+  const [wordEdit, setWordEdit] = useState({ ru: "", es: "", ruPronunciation: "", esPronunciation: "" });
   const active = lists.find((list) => list.id === activeListId) ?? lists[0];
   const disabledWords = new Set(disabledWordIds);
 
@@ -769,6 +771,30 @@ function Admin({ lists, token, online, progress, disabledWordIds, persistLists, 
     await persistLists(lists.map((list) => list.id === active.id ? { ...list, words: [...list.words, created] } : list));
     setWord({ ru: "", es: "", ruPronunciation: "", esPronunciation: "" });
     setNotice("Слово добавлено");
+  }
+
+  function startWordEdit(item: Word) {
+    setEditingWordId(item.id);
+    setWordEdit({
+      ru: item.ru,
+      es: item.es,
+      ruPronunciation: item.ruPronunciation ?? "",
+      esPronunciation: item.esPronunciation ?? "",
+    });
+  }
+
+  function cancelWordEdit() {
+    setEditingWordId("");
+    setWordEdit({ ru: "", es: "", ruPronunciation: "", esPronunciation: "" });
+  }
+
+  async function updateWord(event: React.FormEvent) {
+    event.preventDefault();
+    if (!online || !active || !editingWordId) return;
+    const updated = await api<Word>(`/api/words/${editingWordId}`, token, { method: "PATCH", body: JSON.stringify(wordEdit) });
+    await persistLists(lists.map((list) => list.id === active.id ? { ...list, words: list.words.map((item) => item.id === updated.id ? updated : item) } : list));
+    cancelWordEdit();
+    setNotice("Слово обновлено");
   }
 
   async function deleteWord(wordId: string) {
@@ -817,25 +843,42 @@ function Admin({ lists, token, online, progress, disabledWordIds, persistLists, 
               const itemProgress = progress[item.id];
               const disabled = disabledWords.has(item.id);
               const mastered = correctTotal(itemProgress) >= 30;
+              const editing = editingWordId === item.id;
               return (
                 <div className={disabled ? "word-row disabled" : "word-row"} key={item.id}>
-                  <div><b>{item.ru}</b><small>{item.ruPronunciation}</small></div>
-                  <div><b>{item.es}</b><small>{item.esPronunciation}</small></div>
-                  <div className="word-stats">
-                    <span className="ok">✓ {correctTotal(itemProgress)}</span>
-                    <span className="bad">× {wrongTotal(itemProgress)}</span>
-                    {mastered && <span>30+</span>}
-                  </div>
-                  <label className="word-toggle">
-                    <input
-                      type="checkbox"
-                      checked={!disabled}
-                      onChange={(event) => toggleWordDisabled(item.id, !event.target.checked)}
-                      disabled={!online}
-                    />
-                    <span>{disabled ? "Выкл" : "Вкл"}</span>
-                  </label>
-                  <button className="icon-button" onClick={() => deleteWord(item.id)} disabled={!online} aria-label="Удалить">⌫</button>
+                  {editing ? (
+                    <form className="word-edit-form" onSubmit={updateWord}>
+                      <input value={wordEdit.ru} onChange={(event) => setWordEdit({ ...wordEdit, ru: event.target.value })} placeholder="Русский текст" required />
+                      <input value={wordEdit.es} onChange={(event) => setWordEdit({ ...wordEdit, es: event.target.value })} placeholder="Испанский текст" required />
+                      <input value={wordEdit.ruPronunciation} onChange={(event) => setWordEdit({ ...wordEdit, ruPronunciation: event.target.value })} placeholder="Произношение RU" />
+                      <input value={wordEdit.esPronunciation} onChange={(event) => setWordEdit({ ...wordEdit, esPronunciation: event.target.value })} placeholder="Произношение ES" />
+                      <div className="word-edit-actions">
+                        <button className="primary" disabled={!online}>Сохранить</button>
+                        <button className="ghost" type="button" onClick={cancelWordEdit}>Отмена</button>
+                      </div>
+                    </form>
+                  ) : (
+                    <>
+                      <div><b>{item.ru}</b><small>{item.ruPronunciation}</small></div>
+                      <div><b>{item.es}</b><small>{item.esPronunciation}</small></div>
+                      <div className="word-stats">
+                        <span className="ok">✓ {correctTotal(itemProgress)}</span>
+                        <span className="bad">× {wrongTotal(itemProgress)}</span>
+                        {mastered && <span>30+</span>}
+                      </div>
+                      <label className="word-toggle">
+                        <input
+                          type="checkbox"
+                          checked={!disabled}
+                          onChange={(event) => toggleWordDisabled(item.id, !event.target.checked)}
+                          disabled={!online}
+                        />
+                        <span>{disabled ? "Выкл" : "Вкл"}</span>
+                      </label>
+                      <button className="icon-button" onClick={() => startWordEdit(item)} disabled={!online} aria-label="Редактировать">✎</button>
+                      <button className="icon-button" onClick={() => deleteWord(item.id)} disabled={!online} aria-label="Удалить">⌫</button>
+                    </>
+                  )}
                 </div>
               );
             })}

@@ -227,6 +227,26 @@ async function handleApi(request, response, url) {
   }
 
   const wordMatch = url.pathname.match(/^\/api\/words\/([^/]+)$/);
+  if (request.method === "PATCH" && wordMatch) {
+    const wordId = wordMatch[1];
+    if (!(await ownsWord(user.sub, wordId))) return sendJson(response, 404, { error: "Слово не найдено" });
+    const body = await readJson(request);
+    const ru = String(body.ru || "").trim();
+    const es = String(body.es || "").trim();
+    if (!ru || !es) return sendJson(response, 400, { error: "Нужны русский и испанский тексты" });
+    const { rows } = await pool.query(
+      `
+        update words
+        set ru = $1, es = $2, ru_pronunciation = $3, es_pronunciation = $4, updated_at = now()
+        where id = $5
+        returning *
+      `,
+      [ru, es, String(body.ruPronunciation || ""), String(body.esPronunciation || ""), wordId]
+    );
+    await pool.query("update word_lists set updated_at = now() where id = $1", [rows[0].list_id]);
+    return sendJson(response, 200, mapWord(rows[0]));
+  }
+
   if (request.method === "DELETE" && wordMatch) {
     const wordId = wordMatch[1];
     const { rowCount } = await pool.query(
