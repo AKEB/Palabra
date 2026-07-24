@@ -784,6 +784,10 @@ function Study({ lists, selectedLists, setSelectedLists, mode, setMode, progress
               onTouchStart={(event) => { touchStart.current = event.touches[0].clientX; }}
               onTouchEnd={(event) => {
                 if (touchStart.current === null) return;
+                if (!flipped) {
+                  touchStart.current = null;
+                  return;
+                }
                 const delta = event.changedTouches[0].clientX - touchStart.current;
                 if (delta < -70) nextKnown();
                 if (delta > 70) nextUnknown();
@@ -795,10 +799,12 @@ function Study({ lists, selectedLists, setSelectedLists, mode, setMode, progress
               {flipped && mode === "flash-ru-es" && current.esPronunciation && <span className="pronunciation">{current.esPronunciation}</span>}
               <span className="hint">Нажмите, чтобы перевернуть</span>
             </button>
-            <div className="actions">
-              <button className="danger" onClick={nextUnknown}>× Не знаю</button>
-              <button className="primary" onClick={nextKnown}>✓ Знаю</button>
-            </div>
+            {flipped && (
+              <div className="actions">
+                <button className="danger" onClick={nextUnknown}>× Не знаю</button>
+                <button className="primary" onClick={nextKnown}>✓ Знаю</button>
+              </div>
+            )}
           </>
         )}
         {current && typeMode && (
