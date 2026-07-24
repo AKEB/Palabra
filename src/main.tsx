@@ -153,6 +153,18 @@ function getCurrentStreak(days: string[]) {
   return streak;
 }
 
+function correctTotal(item?: Progress) {
+  return (item?.knownCount ?? 0) + (item?.correctCount ?? 0);
+}
+
+function wrongTotal(item?: Progress) {
+  return (item?.unknownCount ?? 0) + (item?.wrongCount ?? 0);
+}
+
+function userCacheKey(email: string, key: string) {
+  return `user:${email.trim().toLowerCase() || "anonymous"}:${key}`;
+}
+
 function createDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
@@ -205,6 +217,7 @@ function App() {
   const [lists, setLists] = useState<WordList[]>([]);
   const [progress, setProgress] = useState<Record<string, Progress>>({});
   const [queue, setQueue] = useState<ProgressEvent[]>([]);
+  const [disabledWordIds, setDisabledWordIds] = useState<string[]>([]);
   const [selectedLists, setSelectedLists] = useState<string[]>([]);
   const [mode, setMode] = useState<Mode>("flash-ru-es");
   const [view, setView] = useState<View>("study");
@@ -213,20 +226,23 @@ function App() {
   const [notice, setNotice] = useState("");
 
   useEffect(() => {
+    if (!token) return;
     const hydrate = async () => {
-      const cachedLists = await dbGet<WordList[]>("lists", sampleLists);
-      const cachedProgress = await dbGet<Record<string, Progress>>("progress", {});
-      const cachedQueue = await dbGet<ProgressEvent[]>("queue", []);
-      const cachedSelectedLists = await dbGet<string[]>("selectedLists", []);
+      const cachedLists = await dbGet<WordList[]>(userCacheKey(email, "lists"), []);
+      const cachedProgress = await dbGet<Record<string, Progress>>(userCacheKey(email, "progress"), {});
+      const cachedQueue = await dbGet<ProgressEvent[]>(userCacheKey(email, "queue"), []);
+      const cachedDisabledWordIds = await dbGet<string[]>(userCacheKey(email, "disabledWordIds"), []);
+      const cachedSelectedLists = await dbGet<string[]>(userCacheKey(email, "selectedLists"), []);
       setLists(cachedLists.length ? cachedLists : sampleLists);
       const availableLists = cachedLists.length ? cachedLists : sampleLists;
       const validSelectedLists = cachedSelectedLists.filter((id) => availableLists.some((list) => list.id === id));
       setSelectedLists(validSelectedLists.length ? validSelectedLists : availableLists.slice(0, 1).map((item) => item.id));
       setProgress(cachedProgress);
       setQueue(cachedQueue);
+      setDisabledWordIds(cachedDisabledWordIds);
     };
     hydrate();
-  }, []);
+  }, [token, email]);
 
   useEffect(() => {
     const setOn = () => setOnline(true);
@@ -240,8 +256,8 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (token && online) sync();
-  }, [token, online]);
+    if (token && email && online) sync();
+  }, [token, email, online]);
 
   useEffect(() => {
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => undefined);
@@ -249,40 +265,47 @@ function App() {
 
   async function persistLists(next: WordList[]) {
     setLists(next);
-    await dbSet("lists", next);
+    await dbSet(userCacheKey(email, "lists"), next);
   }
 
   async function persistProgress(next: Record<string, Progress>) {
     setProgress(next);
-    await dbSet("progress", next);
+    await dbSet(userCacheKey(email, "progress"), next);
   }
 
   async function persistQueue(next: ProgressEvent[]) {
     setQueue(next);
-    await dbSet("queue", next);
+    await dbSet(userCacheKey(email, "queue"), next);
+  }
+
+  async function persistDisabledWordIds(next: string[]) {
+    setDisabledWordIds(next);
+    await dbSet(userCacheKey(email, "disabledWordIds"), next);
   }
 
   async function sync(eventsOverride?: ProgressEvent[]) {
-    if (!token || !navigator.onLine) return;
+    if (!token || !email || !navigator.onLine) return;
     setSyncing(true);
     setNotice("");
     try {
-      const pending = eventsOverride ?? await dbGet<ProgressEvent[]>("queue", queue);
+      const previousLists = lists;
+      const pending = eventsOverride ?? await dbGet<ProgressEvent[]>(userCacheKey(email, "queue"), queue);
       if (pending.length) {
         await api("/api/sync/progress", token, { method: "POST", body: JSON.stringify({ events: pending }) });
         await persistQueue([]);
       }
-      const data = await api<{ lists: WordList[]; progress: Record<string, Progress>; email: string }>("/api/sync", token);
+      const data = await api<{ lists: WordList[]; progress: Record<string, Progress>; disabledWordIds: string[]; email: string }>("/api/sync", token);
       await persistLists(data.lists);
-      await persistProgress(mergeProgress(await dbGet<Record<string, Progress>>("progress", progress), data.progress));
+      await persistProgress(mergeProgress(await dbGet<Record<string, Progress>>(userCacheKey(email, "progress"), progress), data.progress));
+      await persistDisabledWordIds(data.disabledWordIds ?? []);
       setEmail(data.email);
       localStorage.setItem("palabra-email", data.email);
       setSelectedLists((current) => {
         const validSelected = current.filter((id) => data.lists.some((list) => list.id === id));
-        const selectedTitles = lists.filter((list) => current.includes(list.id)).map((list) => list.title);
+        const selectedTitles = previousLists.filter((list) => current.includes(list.id)).map((list) => list.title);
         const titleMatched = data.lists.filter((list) => selectedTitles.includes(list.title)).map((list) => list.id);
         const nextSelected = validSelected.length ? validSelected : titleMatched.length ? titleMatched : data.lists.slice(0, 1).map((list) => list.id);
-        dbSet("selectedLists", nextSelected).catch(() => undefined);
+        dbSet(userCacheKey(data.email, "selectedLists"), nextSelected).catch(() => undefined);
         return nextSelected;
       });
       setNotice("Синхронизировано");
@@ -298,8 +321,18 @@ function App() {
     const nextQueue = [...queue, event];
     const nextProgress = applyEventsToProgress(progress, [event]);
     await persistProgress(nextProgress);
+    if (correctTotal(nextProgress[wordId]) >= 30 && !disabledWordIds.includes(wordId)) {
+      await persistDisabledWordIds([...disabledWordIds, wordId]);
+    }
     await persistQueue(nextQueue);
     if (token && navigator.onLine) sync(nextQueue);
+  }
+
+  async function toggleWordDisabled(wordId: string, disabled: boolean) {
+    const next = disabled ? Array.from(new Set([...disabledWordIds, wordId])) : disabledWordIds.filter((id) => id !== wordId);
+    await api(`/api/words/${wordId}/disabled`, token, { method: "POST", body: JSON.stringify({ disabled }) });
+    await persistDisabledWordIds(next);
+    setNotice(disabled ? "Слово выключено из тренировки" : "Слово возвращено в тренировку");
   }
 
   function signOut() {
@@ -307,6 +340,11 @@ function App() {
     localStorage.removeItem("palabra-email");
     setToken("");
     setEmail("");
+    setLists([]);
+    setProgress({});
+    setQueue([]);
+    setDisabledWordIds([]);
+    setSelectedLists([]);
     setView("study");
     setNotice("");
   }
@@ -319,7 +357,7 @@ function App() {
     <div className="shell">
       <Sidebar view={view} setView={setView} email={email} signOut={signOut} online={online} syncing={syncing} />
       <main className="workspace">
-        <Topbar online={online} syncing={syncing} sync={sync} notice={notice} />
+        <Topbar online={online} syncing={syncing} sync={sync} notice={notice} signOut={signOut} />
         {view === "study" && (
           <Study
             lists={lists}
@@ -328,11 +366,22 @@ function App() {
             mode={mode}
             setMode={setMode}
             progress={progress}
+            disabledWordIds={disabledWordIds}
             mark={mark}
           />
         )}
         {view === "admin" && (
-          <Admin lists={lists} token={token} online={online} persistLists={persistLists} sync={sync} setNotice={setNotice} />
+          <Admin
+            lists={lists}
+            token={token}
+            online={online}
+            progress={progress}
+            disabledWordIds={disabledWordIds}
+            persistLists={persistLists}
+            toggleWordDisabled={toggleWordDisabled}
+            sync={sync}
+            setNotice={setNotice}
+          />
         )}
         {view === "stats" && <Stats lists={lists} progress={progress} queue={queue} />}
       </main>
@@ -403,16 +452,19 @@ function AuthScreen({ setToken, setEmail, online }: { setToken: (token: string) 
   );
 }
 
-function Study({ lists, selectedLists, setSelectedLists, mode, setMode, progress, mark }: {
+function Study({ lists, selectedLists, setSelectedLists, mode, setMode, progress, disabledWordIds, mark }: {
   lists: WordList[];
   selectedLists: string[];
   setSelectedLists: (ids: string[]) => void;
   mode: Mode;
   setMode: (mode: Mode) => void;
   progress: Record<string, Progress>;
+  disabledWordIds: string[];
   mark: (wordId: string, result: ProgressEvent["result"]) => Promise<void>;
 }) {
-  const words = useMemo(() => lists.filter((list) => selectedLists.includes(list.id)).flatMap((list) => list.words), [lists, selectedLists]);
+  const disabledWords = useMemo(() => new Set(disabledWordIds), [disabledWordIds]);
+  const selectedAllWords = useMemo(() => lists.filter((list) => selectedLists.includes(list.id)).flatMap((list) => list.words), [lists, selectedLists]);
+  const words = useMemo(() => selectedAllWords.filter((word) => !disabledWords.has(word.id)), [selectedAllWords, disabledWords]);
   const wordIdsKey = useMemo(() => words.map((word) => word.id).sort().join("|"), [words]);
   const [session, setSession] = useState<string[]>([]);
   const [currentId, setCurrentId] = useState("");
@@ -423,8 +475,9 @@ function Study({ lists, selectedLists, setSelectedLists, mode, setMode, progress
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const touchStart = useRef<number | null>(null);
   const answerInputRef = useRef<HTMLInputElement | null>(null);
+  const modePickerRef = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => {
+  function restartSession() {
     const ids = shuffle(words.map((word) => word.id));
     setSession(ids);
     setCurrentId(ids[0] ?? "");
@@ -432,14 +485,34 @@ function Study({ lists, selectedLists, setSelectedLists, mode, setMode, progress
     setAnswer("");
     setFeedback("");
     setNeedsAcknowledge(false);
+  }
+
+  useEffect(() => {
+    restartSession();
   }, [wordIdsKey, mode]);
+
+  useEffect(() => {
+    if (!modeMenuOpen) return;
+    function closeOnOutsideClick(event: MouseEvent) {
+      if (!modePickerRef.current?.contains(event.target as Node)) setModeMenuOpen(false);
+    }
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") setModeMenuOpen(false);
+    }
+    document.addEventListener("mousedown", closeOnOutsideClick);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeOnOutsideClick);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [modeMenuOpen]);
 
   const current = words.find((word) => word.id === currentId);
   const currentIndex = session.indexOf(currentId);
   const done = words.length ? words.length - session.length : 0;
-  const selectedWordIds = new Set(words.map((word) => word.id));
+  const selectedWordIds = new Set(selectedAllWords.map((word) => word.id));
   const selectedProgress = Object.values(progress).filter((item) => selectedWordIds.has(item.wordId));
-  const learnedTotal = selectedProgress.filter((item) => item.knownCount + item.correctCount > 0).length;
+  const learnedTotal = selectedProgress.filter((item) => correctTotal(item) > 0).length;
   const activityDays = getActivityDays(progress);
   const streak = getCurrentStreak(activityDays);
   const dailyGoal = Math.min(30, words.length);
@@ -507,7 +580,7 @@ function Study({ lists, selectedLists, setSelectedLists, mode, setMode, progress
     const next = selectedLists.includes(id) ? selectedLists.filter((item) => item !== id) : [...selectedLists, id];
     const nextSelected = next.length ? next : [id];
     setSelectedLists(nextSelected);
-    dbSet("selectedLists", nextSelected).catch(() => undefined);
+    dbSet(userCacheKey(localStorage.getItem("palabra-email") || "", "selectedLists"), nextSelected).catch(() => undefined);
   }
 
   return (
@@ -518,7 +591,7 @@ function Study({ lists, selectedLists, setSelectedLists, mode, setMode, progress
             <p className="eyebrow">Тренировка</p>
             <h2>{currentMode.title}</h2>
           </div>
-          <div className="mode-picker">
+          <div className="mode-picker" ref={modePickerRef}>
             <button className="mode-trigger" type="button" onClick={() => setModeMenuOpen((open) => !open)} aria-expanded={modeMenuOpen}>
               <span>{currentMode.title}</span>
               <span aria-hidden="true">⌄</span>
@@ -546,7 +619,7 @@ function Study({ lists, selectedLists, setSelectedLists, mode, setMode, progress
         <div className="list-strip">
           {lists.map((list) => (
             <button key={list.id} className={selectedLists.includes(list.id) ? "chip active" : "chip"} onClick={() => toggleList(list.id)}>
-              <span>{list.icon}</span>{list.title}<small>{list.words.length}</small>
+              <span>{list.icon}</span>{list.title}<small>{list.words.filter((word) => !disabledWords.has(word.id)).length} / {list.words.length}</small>
             </button>
           ))}
         </div>
@@ -554,10 +627,14 @@ function Study({ lists, selectedLists, setSelectedLists, mode, setMode, progress
           <span>{done} / {words.length}</span>
           <div><i style={{ width: `${words.length ? (done / words.length) * 100 : 0}%` }} /></div>
         </div>
+        <div className="mobile-goal-card">
+          <GoalCard streak={streak} learned={learnedTotal} done={dailyDone} goal={dailyGoal} />
+        </div>
         {!current && (
           <div className="empty-state">
-            <h3>Сессия закончена</h3>
-            <p>Вы прошли выбранные списки. Смените режим или список, чтобы продолжить.</p>
+            <h3>{selectedAllWords.length && !words.length ? "Все слова выключены" : "Сессия закончена"}</h3>
+            <p>{selectedAllWords.length && !words.length ? "Включите слова в админке или добавьте новые в выбранные списки." : "Вы прошли выбранные списки. Смените режим или список, чтобы продолжить."}</p>
+            {!!words.length && <button className="primary restart-button" type="button" onClick={restartSession}>Запустить еще раз</button>}
           </div>
         )}
         {current && !typeMode && (
@@ -606,7 +683,7 @@ function Study({ lists, selectedLists, setSelectedLists, mode, setMode, progress
       <aside className="study-side">
         <GoalCard streak={streak} learned={learnedTotal} done={dailyDone} goal={dailyGoal} />
         <h3>Сегодня</h3>
-        <Metric label="Слов в списках" value={String(words.length)} />
+        <Metric label="Активных слов" value={String(words.length)} />
         <Metric label="Осталось" value={String(session.length)} />
         <Metric label="Очередь ошибок" value={String(Object.values(progress).filter((item) => item.lastResult === "unknown" || item.lastResult === "wrong").length)} />
       </aside>
@@ -641,22 +718,31 @@ function GoalCard({ streak, learned, done, goal }: { streak: number; learned: nu
   );
 }
 
-function Admin({ lists, token, online, persistLists, sync, setNotice }: {
+function Admin({ lists, token, online, progress, disabledWordIds, persistLists, toggleWordDisabled, sync, setNotice }: {
   lists: WordList[];
   token: string;
   online: boolean;
+  progress: Record<string, Progress>;
+  disabledWordIds: string[];
   persistLists: (lists: WordList[]) => Promise<void>;
+  toggleWordDisabled: (wordId: string, disabled: boolean) => Promise<void>;
   sync: () => Promise<void>;
   setNotice: (notice: string) => void;
 }) {
   const [activeListId, setActiveListId] = useState(lists[0]?.id ?? "");
   const [draftList, setDraftList] = useState({ title: "", icon: "📚", color: "#087d86" });
+  const [listEdit, setListEdit] = useState({ title: "", icon: "📚" });
   const [word, setWord] = useState({ ru: "", es: "", ruPronunciation: "", esPronunciation: "" });
   const active = lists.find((list) => list.id === activeListId) ?? lists[0];
+  const disabledWords = new Set(disabledWordIds);
 
   useEffect(() => {
     if (!activeListId && lists[0]) setActiveListId(lists[0].id);
   }, [lists, activeListId]);
+
+  useEffect(() => {
+    if (active) setListEdit({ title: active.title, icon: active.icon });
+  }, [active?.id, active?.title, active?.icon]);
 
   async function saveList(event: React.FormEvent) {
     event.preventDefault();
@@ -666,6 +752,14 @@ function Admin({ lists, token, online, persistLists, sync, setNotice }: {
     setDraftList({ title: "", icon: "📚", color: "#087d86" });
     setActiveListId(created.id);
     setNotice("Список создан");
+  }
+
+  async function updateList(event: React.FormEvent) {
+    event.preventDefault();
+    if (!online || !active) return;
+    const updated = await api<WordList>(`/api/lists/${active.id}`, token, { method: "PATCH", body: JSON.stringify(listEdit) });
+    await persistLists(lists.map((list) => list.id === active.id ? { ...updated, words: list.words } : list));
+    setNotice("Список обновлен");
   }
 
   async function saveWord(event: React.FormEvent) {
@@ -699,7 +793,7 @@ function Admin({ lists, token, online, persistLists, sync, setNotice }: {
           <div className="list-admin">
             {lists.map((list) => (
               <button key={list.id} className={active?.id === list.id ? "list-row active" : "list-row"} onClick={() => setActiveListId(list.id)}>
-                <span>{list.icon}</span><b>{list.title}</b><small>{list.words.length}</small>
+                <span>{list.icon}</span><b>{list.title}</b><small>{list.words.filter((item) => !disabledWords.has(item.id)).length} / {list.words.length}</small>
               </button>
             ))}
           </div>
@@ -711,14 +805,40 @@ function Admin({ lists, token, online, persistLists, sync, setNotice }: {
         </div>
         <div className="panel">
           <h3>{active ? `${active.icon} ${active.title}` : "Слова"}</h3>
+          {active && (
+            <form className="list-edit-form" onSubmit={updateList}>
+              <input value={listEdit.icon} onChange={(event) => setListEdit({ ...listEdit, icon: event.target.value })} aria-label="Иконка списка" />
+              <input value={listEdit.title} onChange={(event) => setListEdit({ ...listEdit, title: event.target.value })} placeholder="Название списка" required />
+              <button className="ghost" disabled={!online}>Сохранить</button>
+            </form>
+          )}
           <div className="word-table">
-            {active?.words.map((item) => (
-              <div className="word-row" key={item.id}>
-                <div><b>{item.ru}</b><small>{item.ruPronunciation}</small></div>
-                <div><b>{item.es}</b><small>{item.esPronunciation}</small></div>
-                <button className="icon-button" onClick={() => deleteWord(item.id)} disabled={!online} aria-label="Удалить">⌫</button>
-              </div>
-            ))}
+            {active?.words.map((item) => {
+              const itemProgress = progress[item.id];
+              const disabled = disabledWords.has(item.id);
+              const mastered = correctTotal(itemProgress) >= 30;
+              return (
+                <div className={disabled ? "word-row disabled" : "word-row"} key={item.id}>
+                  <div><b>{item.ru}</b><small>{item.ruPronunciation}</small></div>
+                  <div><b>{item.es}</b><small>{item.esPronunciation}</small></div>
+                  <div className="word-stats">
+                    <span className="ok">✓ {correctTotal(itemProgress)}</span>
+                    <span className="bad">× {wrongTotal(itemProgress)}</span>
+                    {mastered && <span>30+</span>}
+                  </div>
+                  <label className="word-toggle">
+                    <input
+                      type="checkbox"
+                      checked={!disabled}
+                      onChange={(event) => toggleWordDisabled(item.id, !event.target.checked)}
+                      disabled={!online}
+                    />
+                    <span>{disabled ? "Выкл" : "Вкл"}</span>
+                  </label>
+                  <button className="icon-button" onClick={() => deleteWord(item.id)} disabled={!online} aria-label="Удалить">⌫</button>
+                </div>
+              );
+            })}
           </div>
         </div>
         <form className="panel word-form" onSubmit={saveWord}>
@@ -784,13 +904,13 @@ function Sidebar({ view, setView, email, signOut, online, syncing }: {
   );
 }
 
-function Topbar({ online, syncing, sync, notice }: { online: boolean; syncing: boolean; sync: () => void; notice: string }) {
+function Topbar({ online, syncing, sync, notice, signOut }: { online: boolean; syncing: boolean; sync: () => void; notice: string; signOut: () => void }) {
   return (
     <header className="topbar">
       <div className="mobile-brand">
-        <button className="hamburger" type="button" aria-label="Меню">☰</button>
         <span className="app-icon small">ñ</span>
         <b>Palabra</b>
+        <button className="mobile-signout" type="button" onClick={signOut}>Выйти</button>
       </div>
       <div>
         <h1>Учить слова</h1>

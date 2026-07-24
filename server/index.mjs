@@ -94,6 +94,13 @@ async function initDb() {
       updated_at timestamptz not null default now(),
       primary key (user_id, word_id)
     );
+
+    create table if not exists disabled_words (
+      user_id uuid not null references users(id) on delete cascade,
+      word_id uuid not null references words(id) on delete cascade,
+      created_at timestamptz not null default now(),
+      primary key (user_id, word_id)
+    );
   `);
   await pool.query("alter table progress add column if not exists activity_dates jsonb not null default '[]'::jsonb");
 }
@@ -107,11 +114,19 @@ async function handleApi(request, response, url) {
     const salt = randomBytes(16).toString("hex");
     const passwordHash = hashPassword(password, salt);
     const userId = randomUUID();
+    const client = await pool.connect();
     try {
-      await pool.query("insert into users (id, email, password_hash, salt) values ($1, $2, $3, $4)", [userId, email, passwordHash, salt]);
-      await seedUser(userId);
-    } catch {
-      return sendJson(response, 409, { error: "Такой email уже зарегистрирован" });
+      await client.query("begin");
+      await client.query("insert into users (id, email, password_hash, salt) values ($1, $2, $3, $4)", [userId, email, passwordHash, salt]);
+      await seedUser(userId, client);
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback").catch(() => undefined);
+      if (error?.code === "23505") return sendJson(response, 409, { error: "Такой email уже зарегистрирован" });
+      console.error("Registration failed", error);
+      return sendJson(response, 500, { error: "Не удалось создать аккаунт" });
+    } finally {
+      client.release();
     }
     return sendJson(response, 201, { token: signToken({ sub: userId, email }), email });
   }
@@ -159,6 +174,7 @@ async function handleApi(request, response, url) {
         `,
         [user.sub, event.wordId, result === "known" ? 1 : 0, result === "unknown" ? 1 : 0, result === "correct" ? 1 : 0, result === "wrong" ? 1 : 0, result, activityDate]
       ).catch(() => undefined);
+      await disableMasteredWord(user.sub, event.wordId).catch(() => undefined);
     }
     return sendJson(response, 200, { ok: true });
   }
@@ -172,6 +188,26 @@ async function handleApi(request, response, url) {
       [randomUUID(), user.sub, title, String(body.icon || "📚").slice(0, 8), String(body.color || "#087d86")]
     );
     return sendJson(response, 201, mapList(rows[0], []));
+  }
+
+  const listMatch = url.pathname.match(/^\/api\/lists\/([^/]+)$/);
+  if (request.method === "PATCH" && listMatch) {
+    const listId = listMatch[1];
+    const body = await readJson(request);
+    const title = String(body.title || "").trim();
+    if (!title) return sendJson(response, 400, { error: "Название списка обязательно" });
+    const { rows } = await pool.query(
+      `
+        update word_lists
+        set title = $1, icon = $2, updated_at = now()
+        where id = $3 and user_id = $4
+        returning *
+      `,
+      [title, String(body.icon || "📚").slice(0, 8), listId, user.sub]
+    );
+    if (!rows[0]) return sendJson(response, 404, { error: "Список не найден" });
+    const data = await getWordsByList(user.sub, listId);
+    return sendJson(response, 200, mapList(rows[0], data));
   }
 
   const listWordMatch = url.pathname.match(/^\/api\/lists\/([^/]+)\/words$/);
@@ -200,15 +236,29 @@ async function handleApi(request, response, url) {
     return sendJson(response, rowCount ? 200 : 404, rowCount ? { ok: true } : { error: "Слово не найдено" });
   }
 
+  const disabledWordMatch = url.pathname.match(/^\/api\/words\/([^/]+)\/disabled$/);
+  if (request.method === "POST" && disabledWordMatch) {
+    const wordId = disabledWordMatch[1];
+    if (!(await ownsWord(user.sub, wordId))) return sendJson(response, 404, { error: "Слово не найдено" });
+    const body = await readJson(request);
+    const disabled = Boolean(body.disabled);
+    if (disabled) {
+      await pool.query("insert into disabled_words (user_id, word_id) values ($1, $2) on conflict do nothing", [user.sub, wordId]);
+    } else {
+      await pool.query("delete from disabled_words where user_id = $1 and word_id = $2", [user.sub, wordId]);
+    }
+    return sendJson(response, 200, { wordId, disabled });
+  }
+
   sendJson(response, 404, { error: "Не найдено" });
 }
 
-async function seedUser(userId) {
+async function seedUser(userId, client = pool) {
   for (const list of seedLists) {
     const listId = randomUUID();
-    await pool.query("insert into word_lists (id, user_id, title, icon, color) values ($1, $2, $3, $4, $5)", [listId, userId, list.title, list.icon, list.color]);
+    await client.query("insert into word_lists (id, user_id, title, icon, color) values ($1, $2, $3, $4, $5)", [listId, userId, list.title, list.icon, list.color]);
     for (const word of list.words) {
-      await pool.query(
+      await client.query(
         "insert into words (id, list_id, ru, es, ru_pronunciation, es_pronunciation) values ($1, $2, $3, $4, $5, $6)",
         [randomUUID(), listId, word[0], word[1], word[2], word[3]]
       );
@@ -220,6 +270,7 @@ async function getUserData(userId) {
   const listsResult = await pool.query("select * from word_lists where user_id = $1 order by updated_at desc", [userId]);
   const wordsResult = await pool.query("select w.* from words w join word_lists l on l.id = w.list_id where l.user_id = $1 order by w.updated_at desc", [userId]);
   const progressResult = await pool.query("select * from progress where user_id = $1", [userId]);
+  const disabledResult = await pool.query("select word_id from disabled_words where user_id = $1", [userId]);
   const wordsByList = new Map();
   for (const word of wordsResult.rows) {
     const items = wordsByList.get(word.list_id) ?? [];
@@ -239,12 +290,48 @@ async function getUserData(userId) {
       updatedAt: item.updated_at,
     };
   }
-  return { lists: listsResult.rows.map((list) => mapList(list, wordsByList.get(list.id) ?? [])), progress };
+  return {
+    lists: listsResult.rows.map((list) => mapList(list, wordsByList.get(list.id) ?? [])),
+    progress,
+    disabledWordIds: disabledResult.rows.map((item) => item.word_id),
+  };
+}
+
+async function getWordsByList(userId, listId) {
+  const { rows } = await pool.query(
+    `
+      select w.*
+      from words w
+      join word_lists l on l.id = w.list_id
+      where l.user_id = $1 and l.id = $2
+      order by w.updated_at desc
+    `,
+    [userId, listId]
+  );
+  return rows.map(mapWord);
 }
 
 async function ownsList(userId, listId) {
   const { rowCount } = await pool.query("select 1 from word_lists where id = $1 and user_id = $2", [listId, userId]);
   return rowCount > 0;
+}
+
+async function ownsWord(userId, wordId) {
+  const { rowCount } = await pool.query(
+    "select 1 from words w join word_lists l on l.id = w.list_id where w.id = $1 and l.user_id = $2",
+    [wordId, userId]
+  );
+  return rowCount > 0;
+}
+
+async function disableMasteredWord(userId, wordId) {
+  const { rows } = await pool.query(
+    "select known_count + correct_count as correct_total from progress where user_id = $1 and word_id = $2",
+    [userId, wordId]
+  );
+  if (Number(rows[0]?.correct_total ?? 0) >= 30) {
+    await pool.query("insert into disabled_words (user_id, word_id) values ($1, $2) on conflict do nothing", [userId, wordId]);
+  }
 }
 
 function mapList(row, words) {
@@ -281,13 +368,17 @@ function signToken(payload) {
 }
 
 function verifyToken(token) {
-  const [header, body, signature] = token.split(".");
-  if (!header || !body || !signature) return null;
-  const expected = createHmac("sha256", JWT_SECRET).update(`${header}.${body}`).digest("base64url");
-  if (expected !== signature) return null;
-  const payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
-  if (!payload.exp || payload.exp < Math.floor(Date.now() / 1000)) return null;
-  return payload;
+  try {
+    const [header, body, signature] = token.split(".");
+    if (!header || !body || !signature) return null;
+    const expected = createHmac("sha256", JWT_SECRET).update(`${header}.${body}`).digest("base64url");
+    if (!safeEqual(signature, expected)) return null;
+    const payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
+    if (!payload.exp || payload.exp < Math.floor(Date.now() / 1000)) return null;
+    return payload;
+  } catch {
+    return null;
+  }
 }
 
 async function requireUser(request, response) {
@@ -303,6 +394,12 @@ async function requireUser(request, response) {
 
 function b64url(value) {
   return Buffer.from(value).toString("base64url");
+}
+
+function safeEqual(value, expected) {
+  const valueBuffer = Buffer.from(value);
+  const expectedBuffer = Buffer.from(expected);
+  return valueBuffer.length === expectedBuffer.length && timingSafeEqual(valueBuffer, expectedBuffer);
 }
 
 async function readJson(request) {
