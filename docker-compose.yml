@@ -1,0 +1,32 @@
+services:
+  app:
+    build: .
+    image: ${DOCKERHUB_IMAGE:-palabra:latest}
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    environment:
+      PORT: 8080
+      DATABASE_URL: postgres://palabra:palabra@db:5432/palabra
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: palabra
+      POSTGRES_PASSWORD: palabra
+      POSTGRES_DB: palabra
+    volumes:
+      - palabra-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U palabra -d palabra"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+volumes:
+  palabra-postgres:

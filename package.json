@@ -1,0 +1,34 @@
+{
+  "name": "palabra-pwa",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "start": "node server/index.mjs",
+    "test": "npm run build",
+    "typecheck": "tsc --noEmit",
+    "lint": "npm run typecheck",
+    "docker:build": "docker build -t ${DOCKERHUB_IMAGE:-palabra:latest} .",
+    "docker:push": "docker push ${DOCKERHUB_IMAGE:-palabra:latest}"
+  },
+  "dependencies": {
+    "pg": "^8.22.0",
+    "react": "19.2.6",
+    "react-dom": "19.2.6"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.19",
+    "@types/pg": "^8.20.0",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "6.0.2",
+    "eslint": "9.39.4",
+    "typescript": "5.9.3",
+    "vite": "8.0.13"
+  },
+  "type": "module"
+}

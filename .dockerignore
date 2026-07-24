@@ -1,0 +1,8 @@
+node_modules
+dist
+.git
+.wrangler
+.next
+Dockerfile
+docker-compose*.yml
+npm-debug.log
