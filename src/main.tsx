@@ -766,9 +766,6 @@ function Study({ lists, selectedLists, setSelectedLists, mode, setMode, progress
           <span>{done} / {words.length}</span>
           <div><i style={{ width: `${words.length ? (done / words.length) * 100 : 0}%` }} /></div>
         </div>
-        <div className="mobile-goal-card">
-          <GoalCard streak={streak} learned={learnedTotal} done={dailyDone} goal={dailyGoal} />
-        </div>
         {!current && (
           <div className="empty-state">
             <h3>{selectedAllWords.length && !words.length ? "Все слова выключены" : "Сессия закончена"}</h3>
@@ -824,6 +821,9 @@ function Study({ lists, selectedLists, setSelectedLists, mode, setMode, progress
             </div>
           </form>
         )}
+        <div className="mobile-goal-card">
+          <GoalCard streak={streak} learned={learnedTotal} done={dailyDone} goal={dailyGoal} />
+        </div>
       </div>
       <aside className="study-side">
         <GoalCard streak={streak} learned={learnedTotal} done={dailyDone} goal={dailyGoal} />
