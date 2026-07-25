@@ -52,6 +52,7 @@ type AuthMode = "login" | "register";
 const STORE = "palabra-store";
 const DB_NAME = "palabra-db";
 const DB_VERSION = 1;
+const RETRY_AFTER_WORDS = 5;
 
 const MODES: Array<{ id: Mode; title: string; description: string }> = [
   { id: "flash-ru-es", title: "Карточки RU -> ES", description: "Увидеть русское, вспомнить испанское" },
@@ -675,8 +676,7 @@ function Study({ lists, selectedLists, setSelectedLists, mode, setMode, progress
     if (!current) return;
     mark(current.id, typeMode ? "wrong" : "unknown", practiceKind);
     const others = session.filter((id) => id !== current.id);
-    const retryWindow = Math.min(5, others.length);
-    const index = retryWindow ? 1 + Math.floor(Math.random() * retryWindow) : 0;
+    const index = Math.min(RETRY_AFTER_WORDS, others.length);
     const next = [...others.slice(0, index), current.id, ...others.slice(index)];
     setSession(next);
     setCurrentId(next[0] ?? current.id);
