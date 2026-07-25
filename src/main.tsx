@@ -826,7 +826,18 @@ function Study({ lists, selectedLists, setSelectedLists, mode, setMode, progress
           <form className="typing-card" onSubmit={checkAnswer}>
             <p>{mode === "type-ru-es" ? "Как будет на испанском?" : "Как будет по-русски?"}</p>
             <h3>{mode === "type-ru-es" ? current.ru : current.es}</h3>
-            <input ref={answerInputRef} value={answer} onChange={(event) => setAnswer(event.target.value)} autoFocus placeholder="Введите ответ" disabled={needsAcknowledge} />
+            <input
+              ref={answerInputRef}
+              value={answer}
+              onChange={(event) => setAnswer(event.target.value)}
+              autoFocus
+              placeholder="Введите ответ"
+              disabled={needsAcknowledge}
+              lang={mode === "type-ru-es" ? "es" : "ru"}
+              autoCorrect="off"
+              autoCapitalize="none"
+              spellCheck={false}
+            />
             {feedback && <div className={feedback.startsWith("Верно") ? "feedback ok" : "feedback bad"}>{feedback}</div>}
             {!needsAcknowledge && <button className="primary wide">Проверить</button>}
             {needsAcknowledge && <button className="primary wide" type="button" onClick={nextUnknown}>Понял</button>}
