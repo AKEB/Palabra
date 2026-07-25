@@ -52,6 +52,7 @@ type AuthMode = "login" | "register";
 const STORE = "palabra-store";
 const DB_NAME = "palabra-db";
 const DB_VERSION = 1;
+const STUDY_SESSION_SIZE = 30;
 const RETRY_AFTER_WORDS = 5;
 
 const MODES: Array<{ id: Mode; title: string; description: string }> = [
@@ -257,20 +258,35 @@ function progressGap(item?: Progress) {
   return correctTotal(item) - wrongTotal(item);
 }
 
+function totalAttempts(item?: Progress) {
+  return correctTotal(item) + wrongTotal(item);
+}
+
+function studyWeight(word: Word, progress: Record<string, Progress>, strongestGap: number, mostAttempts: number) {
+  const item = progress[word.id];
+  const attempts = totalAttempts(item);
+  const weakPriority = Math.min(40, Math.max(0, strongestGap - progressGap(item)));
+  const errorPriority = Math.min(20, wrongTotal(item) * 3);
+  const rarePriority = Math.min(18, Math.max(0, mostAttempts - attempts) / 2);
+  const masteredPenalty = wrongTotal(item) === 0 && correctTotal(item) > 5 ? 0.35 : 1;
+  return Math.max(0.2, (1 + weakPriority + errorPriority + rarePriority) * masteredPenalty);
+}
+
 function weightedStudyOrder(words: Word[], progress: Record<string, Progress>) {
   if (!words.length) return [];
   const gaps = words.map((word) => progressGap(progress[word.id]));
   const strongestGap = Math.max(...gaps, 0);
+  const mostAttempts = Math.max(...words.map((word) => totalAttempts(progress[word.id])), 0);
   return words
     .map((word) => {
-      const weakPriority = Math.min(40, strongestGap - progressGap(progress[word.id]));
-      const weight = 1 + weakPriority;
+      const weight = studyWeight(word, progress, strongestGap, mostAttempts);
       return {
         id: word.id,
         priority: Math.log(Math.random()) / weight,
       };
     })
     .sort((left, right) => right.priority - left.priority)
+    .slice(0, STUDY_SESSION_SIZE)
     .map((item) => item.id);
 }
 
@@ -605,6 +621,7 @@ function Study({ lists, selectedLists, setSelectedLists, mode, setMode, progress
   const words = useMemo(() => selectedAllWords.filter((word) => !disabledWords.has(word.id)), [selectedAllWords, disabledWords]);
   const wordIdsKey = useMemo(() => words.map((word) => word.id).sort().join("|"), [words]);
   const [session, setSession] = useState<string[]>([]);
+  const [sessionTotal, setSessionTotal] = useState(0);
   const [currentId, setCurrentId] = useState("");
   const [flipped, setFlipped] = useState(false);
   const [answer, setAnswer] = useState("");
@@ -618,6 +635,7 @@ function Study({ lists, selectedLists, setSelectedLists, mode, setMode, progress
   function restartSession() {
     const ids = weightedStudyOrder(words, progress);
     setSession(ids);
+    setSessionTotal(ids.length);
     setCurrentId(ids[0] ?? "");
     setFlipped(false);
     setAnswer("");
@@ -646,8 +664,8 @@ function Study({ lists, selectedLists, setSelectedLists, mode, setMode, progress
   }, [modeMenuOpen]);
 
   const current = words.find((word) => word.id === currentId);
-  const currentIndex = session.indexOf(currentId);
-  const done = words.length ? words.length - session.length : 0;
+  const done = sessionTotal ? sessionTotal - session.length : 0;
+  const currentStep = current ? Math.min(sessionTotal, done + 1) : done;
   const selectedWordIds = new Set(selectedAllWords.map((word) => word.id));
   const selectedProgress = Object.values(progress).filter((item) => selectedWordIds.has(item.wordId));
   const learnedTotal = selectedProgress.filter((item) => correctTotal(item) > 0).length;
@@ -763,8 +781,8 @@ function Study({ lists, selectedLists, setSelectedLists, mode, setMode, progress
           ))}
         </div>
         <div className="progress-line">
-          <span>{done} / {words.length}</span>
-          <div><i style={{ width: `${words.length ? (done / words.length) * 100 : 0}%` }} /></div>
+          <span>{done} / {sessionTotal}</span>
+          <div><i style={{ width: `${sessionTotal ? (done / sessionTotal) * 100 : 0}%` }} /></div>
         </div>
         {!current && (
           <div className="empty-state">
@@ -791,7 +809,7 @@ function Study({ lists, selectedLists, setSelectedLists, mode, setMode, progress
                 touchStart.current = null;
               }}
             >
-              <span className="card-counter">{currentIndex + 1} / {session.length}</span>
+              <span className="card-counter">{currentStep} / {sessionTotal}</span>
               <span className="card-word">{!flipped ? (mode === "flash-ru-es" ? current.ru : current.es) : (mode === "flash-ru-es" ? current.es : current.ru)}</span>
               {flipped && mode === "flash-ru-es" && current.esPronunciation && <span className="pronunciation">{current.esPronunciation}</span>}
               <span className="hint">Нажмите, чтобы перевернуть</span>
