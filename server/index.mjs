@@ -86,6 +86,13 @@ async function initDb() {
       created_at timestamptz not null default now(),
       primary key (user_id, word_id)
     );
+
+    create table if not exists learned_words (
+      user_id uuid not null references users(id) on delete cascade,
+      word_id uuid not null references words(id) on delete cascade,
+      created_at timestamptz not null default now(),
+      primary key (user_id, word_id)
+    );
   `);
   await pool.query("alter table users add column if not exists is_admin boolean not null default false");
   await pool.query("alter table word_lists add column if not exists is_global boolean not null default false");
@@ -465,6 +472,20 @@ async function handleApi(request, response, url) {
     return sendJson(response, 200, { wordId, disabled });
   }
 
+  const learnedWordMatch = url.pathname.match(/^\/api\/words\/([^/]+)\/learned$/);
+  if (request.method === "POST" && learnedWordMatch) {
+    const wordId = learnedWordMatch[1];
+    if (!(await canAccessWord(user, wordId))) return sendJson(response, 404, { error: "Слово не найдено" });
+    const body = await readJson(request);
+    const learned = body.learned === undefined ? true : Boolean(body.learned);
+    if (learned) {
+      await pool.query("insert into learned_words (user_id, word_id) values ($1, $2) on conflict do nothing", [user.sub, wordId]);
+    } else {
+      await pool.query("delete from learned_words where user_id = $1 and word_id = $2", [user.sub, wordId]);
+    }
+    return sendJson(response, 200, { wordId, learned });
+  }
+
   sendJson(response, 404, { error: "Не найдено" });
 }
 
@@ -491,6 +512,7 @@ async function getUserData(userId) {
   );
   const progressResult = await pool.query("select * from progress where user_id = $1", [userId]);
   const disabledResult = await pool.query("select word_id from disabled_words where user_id = $1", [userId]);
+  const learnedResult = await pool.query("select word_id from learned_words where user_id = $1", [userId]);
   const wordsByList = new Map();
   for (const word of wordsResult.rows) {
     const items = wordsByList.get(word.list_id) ?? [];
@@ -518,6 +540,7 @@ async function getUserData(userId) {
     lists: listsResult.rows.map((list) => mapList(list, wordsByList.get(list.id) ?? [])),
     progress,
     disabledWordIds: disabledResult.rows.map((item) => item.word_id),
+    learnedWordIds: learnedResult.rows.map((item) => item.word_id),
   };
 }
 

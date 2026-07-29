@@ -50,7 +50,7 @@ type ProgressEvent = {
 };
 
 type Mode = "flash-ru-es" | "flash-es-ru" | "type-ru-es" | "type-es-ru";
-type View = "study" | "admin" | "users" | "stats";
+type View = "learn" | "test" | "admin" | "users" | "stats";
 type AuthMode = "login" | "register";
 
 type AuthUser = {
@@ -358,9 +358,10 @@ function App() {
   const [progress, setProgress] = useState<Record<string, Progress>>({});
   const [queue, setQueue] = useState<ProgressEvent[]>([]);
   const [disabledWordIds, setDisabledWordIds] = useState<string[]>([]);
+  const [learnedWordIds, setLearnedWordIds] = useState<string[]>([]);
   const [selectedLists, setSelectedLists] = useState<string[]>([]);
   const [mode, setMode] = useState<Mode>("flash-ru-es");
-  const [view, setView] = useState<View>("study");
+  const [view, setView] = useState<View>("learn");
   const [online, setOnline] = useState(navigator.onLine);
   const [syncing, setSyncing] = useState(false);
   const [notice, setNotice] = useState("");
@@ -372,6 +373,7 @@ function App() {
       const cachedProgress = await dbGet<Record<string, Progress>>(userCacheKey(email, "progress"), {});
       const cachedQueue = await dbGet<ProgressEvent[]>(userCacheKey(email, "queue"), []);
       const cachedDisabledWordIds = await dbGet<string[]>(userCacheKey(email, "disabledWordIds"), []);
+      const cachedLearnedWordIds = await dbGet<string[]>(userCacheKey(email, "learnedWordIds"), []);
       const cachedSelectedLists = await dbGet<string[]>(userCacheKey(email, "selectedLists"), []);
       setLists(cachedLists);
       const availableLists = cachedLists;
@@ -380,6 +382,7 @@ function App() {
       setProgress(cachedProgress);
       setQueue(cachedQueue);
       setDisabledWordIds(cachedDisabledWordIds);
+      setLearnedWordIds(cachedLearnedWordIds);
     };
     hydrate();
   }, [token, email]);
@@ -423,6 +426,11 @@ function App() {
     await dbSet(userCacheKey(email, "disabledWordIds"), next);
   }
 
+  async function persistLearnedWordIds(next: string[]) {
+    setLearnedWordIds(next);
+    await dbSet(userCacheKey(email, "learnedWordIds"), next);
+  }
+
   async function sync(eventsOverride?: ProgressEvent[]) {
     if (!token || !email || !navigator.onLine) return;
     setSyncing(true);
@@ -434,10 +442,17 @@ function App() {
         await api("/api/sync/progress", token, { method: "POST", body: JSON.stringify({ events: pending }) });
         await persistQueue([]);
       }
-      const data = await api<{ lists: WordList[]; progress: Record<string, Progress>; disabledWordIds: string[]; email: string; user: AuthUser }>("/api/sync", token);
+      const data = await api<{ lists: WordList[]; progress: Record<string, Progress>; disabledWordIds: string[]; learnedWordIds: string[]; email: string; user: AuthUser }>("/api/sync", token);
       await persistLists(data.lists);
       await persistProgress(mergeProgress(await dbGet<Record<string, Progress>>(userCacheKey(email, "progress"), progress), data.progress));
       await persistDisabledWordIds(data.disabledWordIds ?? []);
+      const localLearned = await dbGet<string[]>(userCacheKey(email, "learnedWordIds"), learnedWordIds);
+      const remoteLearned = data.learnedWordIds ?? [];
+      const missingOnServer = localLearned.filter((id) => !remoteLearned.includes(id));
+      for (const wordId of missingOnServer) {
+        await api(`/api/words/${wordId}/learned`, token, { method: "POST", body: JSON.stringify({ learned: true }) }).catch(() => undefined);
+      }
+      await persistLearnedWordIds(Array.from(new Set([...localLearned, ...remoteLearned])));
       setEmail(data.email);
       setCurrentUser(data.user);
       localStorage.setItem("palabra-email", data.email);
@@ -469,6 +484,16 @@ function App() {
     if (token && navigator.onLine) sync(nextQueue);
   }
 
+  async function markWordLearned(wordId: string, learned = true) {
+    const next = learned
+      ? Array.from(new Set([...learnedWordIds, wordId]))
+      : learnedWordIds.filter((id) => id !== wordId);
+    await persistLearnedWordIds(next);
+    if (token && navigator.onLine) {
+      await api(`/api/words/${wordId}/learned`, token, { method: "POST", body: JSON.stringify({ learned }) });
+    }
+  }
+
   async function toggleWordDisabled(wordId: string, disabled: boolean) {
     const next = disabled ? Array.from(new Set([...disabledWordIds, wordId])) : disabledWordIds.filter((id) => id !== wordId);
     await api(`/api/words/${wordId}/disabled`, token, { method: "POST", body: JSON.stringify({ disabled }) });
@@ -489,13 +514,14 @@ function App() {
     setProgress({});
     setQueue([]);
     setDisabledWordIds([]);
+    setLearnedWordIds([]);
     setSelectedLists([]);
-    setView("study");
+    setView("learn");
     setNotice("");
   }
 
   useEffect(() => {
-    if (view === "users" && !currentUser?.isAdmin) setView("study");
+    if (view === "users" && !currentUser?.isAdmin) setView("learn");
   }, [view, currentUser?.isAdmin]);
 
   if (!token) {
@@ -506,9 +532,18 @@ function App() {
     <div className="shell">
       <Sidebar view={view} setView={setView} email={email} currentUser={currentUser} signOut={signOut} online={online} syncing={syncing} />
       <main className="workspace">
-        <Topbar online={online} syncing={syncing} sync={sync} notice={notice} signOut={signOut} />
-        {view === "study" && (
-          <Study
+        <Topbar view={view} online={online} syncing={syncing} sync={sync} notice={notice} signOut={signOut} />
+        {view === "learn" && (
+          <Learn
+            lists={lists}
+            selectedLists={selectedLists}
+            setSelectedLists={setSelectedLists}
+            learnedWordIds={learnedWordIds}
+            markWordLearned={markWordLearned}
+          />
+        )}
+        {view === "test" && (
+          <Test
             lists={lists}
             selectedLists={selectedLists}
             setSelectedLists={setSelectedLists}
@@ -516,6 +551,7 @@ function App() {
             setMode={setMode}
             progress={progress}
             disabledWordIds={disabledWordIds}
+            learnedWordIds={learnedWordIds}
             mark={mark}
           />
         )}
@@ -528,6 +564,7 @@ function App() {
             sync={sync}
             progress={progress}
             disabledWordIds={disabledWordIds}
+            learnedWordIds={learnedWordIds}
             persistLists={persistLists}
             toggleWordDisabled={toggleWordDisabled}
             setNotice={setNotice}
@@ -542,7 +579,7 @@ function App() {
             setNotice={setNotice}
           />
         )}
-        {view === "stats" && <Stats lists={lists} progress={progress} queue={queue} />}
+        {view === "stats" && <Stats lists={lists} progress={progress} queue={queue} learnedWordIds={learnedWordIds} />}
       </main>
       <MobileNav view={view} setView={setView} currentUser={currentUser} />
     </div>
@@ -617,7 +654,197 @@ function AuthScreen({ setToken, setEmail, setCurrentUser, online }: {
   );
 }
 
-function Study({ lists, selectedLists, setSelectedLists, mode, setMode, progress, disabledWordIds, mark }: {
+function Learn({ lists, selectedLists, setSelectedLists, learnedWordIds, markWordLearned }: {
+  lists: WordList[];
+  selectedLists: string[];
+  setSelectedLists: (ids: string[]) => void;
+  learnedWordIds: string[];
+  markWordLearned: (wordId: string, learned?: boolean) => Promise<void>;
+}) {
+  const learnedWords = useMemo(() => new Set(learnedWordIds), [learnedWordIds]);
+  const selectedAllWords = useMemo(
+    () => lists.filter((list) => selectedLists.includes(list.id)).flatMap((list) => list.words),
+    [lists, selectedLists]
+  );
+  const wordsToLearn = useMemo(
+    () => selectedAllWords.filter((word) => !learnedWords.has(word.id)),
+    [selectedAllWords, learnedWords]
+  );
+  const wordIdsKey = useMemo(() => selectedAllWords.map((word) => word.id).join("|"), [selectedAllWords]);
+  const [session, setSession] = useState<string[]>([]);
+  const [currentId, setCurrentId] = useState("");
+  const [flipped, setFlipped] = useState(false);
+  const touchStart = useRef<number | null>(null);
+  const learnedCount = selectedAllWords.filter((word) => learnedWords.has(word.id)).length;
+  const sessionTotal = selectedAllWords.length;
+
+  function restartSession() {
+    const unlearned = selectedAllWords.filter((word) => !learnedWords.has(word.id)).map((word) => word.id);
+    const learned = selectedAllWords.filter((word) => learnedWords.has(word.id)).map((word) => word.id);
+    const ids = [...unlearned, ...learned];
+    setSession(ids);
+    setCurrentId(ids[0] ?? "");
+    setFlipped(false);
+  }
+
+  useEffect(() => {
+    restartSession();
+  }, [wordIdsKey]);
+
+  const current = selectedAllWords.find((word) => word.id === currentId);
+  const currentLearned = Boolean(current && learnedWords.has(current.id));
+  const currentIndex = Math.max(0, session.indexOf(currentId));
+  const currentStep = session.length ? currentIndex + 1 : 0;
+
+  function applySelectedLists(ids: string[]) {
+    setSelectedLists(ids);
+    dbSet(userCacheKey(localStorage.getItem("palabra-email") || "", "selectedLists"), ids).catch(() => undefined);
+  }
+
+  function toggleList(id: string) {
+    const next = selectedLists.includes(id) ? selectedLists.filter((item) => item !== id) : [...selectedLists, id];
+    applySelectedLists(next.length ? next : [id]);
+  }
+
+  function goPrev() {
+    if (session.length < 2) return;
+    const nextIndex = currentIndex <= 0 ? session.length - 1 : currentIndex - 1;
+    setCurrentId(session[nextIndex]);
+    setFlipped(false);
+  }
+
+  function goNext() {
+    if (session.length < 2) return;
+    const nextIndex = currentIndex >= session.length - 1 ? 0 : currentIndex + 1;
+    setCurrentId(session[nextIndex]);
+    setFlipped(false);
+  }
+
+  function goToNextUnlearned(fromId: string) {
+    const fromIndex = session.indexOf(fromId);
+    for (let offset = 1; offset <= session.length; offset += 1) {
+      const id = session[(fromIndex + offset) % session.length];
+      if (!learnedWords.has(id) && id !== fromId) {
+        setCurrentId(id);
+        return;
+      }
+    }
+    const nextIndex = fromIndex >= session.length - 1 ? 0 : fromIndex + 1;
+    setCurrentId(session[nextIndex] ?? fromId);
+  }
+
+  async function onRemembered() {
+    if (!current) return;
+    await markWordLearned(current.id, true);
+    setFlipped(false);
+    goToNextUnlearned(current.id);
+  }
+
+  async function onUnknown() {
+    if (!current) return;
+    if (learnedWords.has(current.id)) {
+      await markWordLearned(current.id, false);
+    }
+    const others = session.filter((id) => id !== current.id);
+    const index = Math.min(RETRY_AFTER_WORDS, others.length);
+    const next = [...others.slice(0, index), current.id, ...others.slice(index)];
+    setSession(next);
+    setCurrentId(next[0] ?? current.id);
+    setFlipped(false);
+  }
+
+  return (
+    <section className="study-grid">
+      <div className="study-main">
+        <div className="section-head">
+          <div>
+            <p className="eyebrow">Обучение</p>
+            <h2>Запоминание слов</h2>
+          </div>
+        </div>
+        <ListMultiselect
+          lists={lists}
+          selectedLists={selectedLists}
+          toggleList={toggleList}
+          setSelectedLists={applySelectedLists}
+          countFor={(list) => list.words.filter((word) => learnedWords.has(word.id)).length}
+        />
+        <div className="progress-line">
+          <span>{learnedCount} / {sessionTotal}</span>
+          <div><i style={{ width: `${sessionTotal ? (learnedCount / sessionTotal) * 100 : 0}%` }} /></div>
+        </div>
+        {!current && (
+          <div className="empty-state">
+            <h3>Нет слов</h3>
+            <p>Выберите список слов, чтобы начать обучение.</p>
+          </div>
+        )}
+        {current && (
+          <>
+            <button
+              className={`flip-card ${flipped ? "flipped" : ""} ${currentLearned ? "learned" : ""}`}
+              onClick={() => setFlipped(!flipped)}
+              onTouchStart={(event) => { touchStart.current = event.touches[0].clientX; }}
+              onTouchEnd={(event) => {
+                if (touchStart.current === null) return;
+                const delta = event.changedTouches[0].clientX - touchStart.current;
+                touchStart.current = null;
+                if (Math.abs(delta) < 70) return;
+                if (delta > 0) goPrev();
+                else goNext();
+              }}
+            >
+              <span className="card-counter">{currentStep} / {session.length}</span>
+              {currentLearned && <span className="learned-badge" aria-label="Выучено">✓</span>}
+              {flipped && <span className="card-prompt">{current.ru}</span>}
+              <span className="card-word">{flipped ? current.es : current.ru}</span>
+              {flipped && current.esPronunciation && <span className="pronunciation">{current.esPronunciation}</span>}
+              {flipped && current.esAudioUrl && (
+                <button
+                  className="audio-button"
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    new Audio(current.esAudioUrl).play().catch(() => undefined);
+                  }}
+                >
+                  ▶ Произношение
+                </button>
+              )}
+              <span className="hint">
+                {currentLearned
+                  ? (flipped ? "Выученное слово — можно листать дальше" : "Выучено · нажмите для перевода")
+                  : (flipped ? "Запомните испанское слово" : "Нажмите для перевода, свайп для листания")}
+              </span>
+            </button>
+            <div className="learn-nav">
+              <button className="ghost" type="button" onClick={goPrev} disabled={session.length < 2}>← Назад</button>
+              <button className="ghost" type="button" onClick={goNext} disabled={session.length < 2}>Вперёд →</button>
+            </div>
+            {flipped && (
+              <div className="actions">
+                <button className="danger" type="button" onClick={() => onUnknown().catch(() => undefined)}>× Не знаю</button>
+                {currentLearned ? (
+                  <button className="ghost learned-done" type="button" disabled>✓ Выучено</button>
+                ) : (
+                  <button className="primary" type="button" onClick={() => onRemembered().catch(() => undefined)}>✓ Запомнил</button>
+                )}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+      <aside className="study-side">
+        <h3>Обучение</h3>
+        <Metric label="Выбрано слов" value={String(selectedAllWords.length)} />
+        <Metric label="Уже выучено" value={String(learnedCount)} />
+        <Metric label="Осталось выучить" value={String(wordsToLearn.length)} />
+      </aside>
+    </section>
+  );
+}
+
+function Test({ lists, selectedLists, setSelectedLists, mode, setMode, progress, disabledWordIds, learnedWordIds, mark }: {
   lists: WordList[];
   selectedLists: string[];
   setSelectedLists: (ids: string[]) => void;
@@ -625,11 +852,16 @@ function Study({ lists, selectedLists, setSelectedLists, mode, setMode, progress
   setMode: (mode: Mode) => void;
   progress: Record<string, Progress>;
   disabledWordIds: string[];
+  learnedWordIds: string[];
   mark: (wordId: string, result: ProgressEvent["result"], practiceKind: PracticeKind) => Promise<void>;
 }) {
   const disabledWords = useMemo(() => new Set(disabledWordIds), [disabledWordIds]);
+  const learnedWords = useMemo(() => new Set(learnedWordIds), [learnedWordIds]);
   const selectedAllWords = useMemo(() => lists.filter((list) => selectedLists.includes(list.id)).flatMap((list) => list.words), [lists, selectedLists]);
-  const words = useMemo(() => selectedAllWords.filter((word) => !disabledWords.has(word.id)), [selectedAllWords, disabledWords]);
+  const words = useMemo(
+    () => selectedAllWords.filter((word) => learnedWords.has(word.id) && !disabledWords.has(word.id)),
+    [selectedAllWords, learnedWords, disabledWords]
+  );
   const wordIdsKey = useMemo(() => words.map((word) => word.id).sort().join("|"), [words]);
   const [session, setSession] = useState<string[]>([]);
   const [sessionTotal, setSessionTotal] = useState(0);
@@ -679,10 +911,10 @@ function Study({ lists, selectedLists, setSelectedLists, mode, setMode, progress
   const currentStep = current ? Math.min(sessionTotal, done + 1) : done;
   const selectedWordIds = new Set(selectedAllWords.map((word) => word.id));
   const selectedProgress = Object.values(progress).filter((item) => selectedWordIds.has(item.wordId));
-  const learnedTotal = selectedProgress.filter((item) => correctTotal(item) > 0).length;
+  const learnedTotal = selectedAllWords.filter((word) => learnedWords.has(word.id)).length;
   const activityDays = getActivityDays(progress);
   const streak = getCurrentStreak(activityDays);
-  const dailyGoal = Math.min(30, words.length);
+  const dailyGoal = Math.min(30, words.length || 1);
   const today = dateKey();
   const dailyDone = Math.min(dailyGoal, selectedProgress.filter((item) => item.activityDates?.includes(today)).length);
   const currentMode = MODES.find((item) => item.id === mode)!;
@@ -744,11 +976,14 @@ function Study({ lists, selectedLists, setSelectedLists, mode, setMode, progress
     });
   }
 
+  function applySelectedLists(ids: string[]) {
+    setSelectedLists(ids);
+    dbSet(userCacheKey(localStorage.getItem("palabra-email") || "", "selectedLists"), ids).catch(() => undefined);
+  }
+
   function toggleList(id: string) {
     const next = selectedLists.includes(id) ? selectedLists.filter((item) => item !== id) : [...selectedLists, id];
-    const nextSelected = next.length ? next : [id];
-    setSelectedLists(nextSelected);
-    dbSet(userCacheKey(localStorage.getItem("palabra-email") || "", "selectedLists"), nextSelected).catch(() => undefined);
+    applySelectedLists(next.length ? next : [id]);
   }
 
   return (
@@ -756,7 +991,7 @@ function Study({ lists, selectedLists, setSelectedLists, mode, setMode, progress
       <div className="study-main">
         <div className="section-head">
           <div>
-            <p className="eyebrow">Тренировка</p>
+            <p className="eyebrow">Тестирование</p>
             <h2>{currentMode.title}</h2>
           </div>
           <div className="mode-picker" ref={modePickerRef}>
@@ -784,21 +1019,37 @@ function Study({ lists, selectedLists, setSelectedLists, mode, setMode, progress
             )}
           </div>
         </div>
-        <div className="list-strip">
-          {lists.map((list) => (
-            <button key={list.id} className={selectedLists.includes(list.id) ? "chip active" : "chip"} onClick={() => toggleList(list.id)}>
-              <span>{list.icon}</span>{list.title}<small>{list.words.filter((word) => !disabledWords.has(word.id)).length} / {list.words.length}</small>
-            </button>
-          ))}
-        </div>
+        <ListMultiselect
+          lists={lists}
+          selectedLists={selectedLists}
+          toggleList={toggleList}
+          setSelectedLists={applySelectedLists}
+          countFor={(list) => list.words.filter((word) => learnedWords.has(word.id) && !disabledWords.has(word.id)).length}
+        />
         <div className="progress-line">
           <span>{done} / {sessionTotal}</span>
           <div><i style={{ width: `${sessionTotal ? (done / sessionTotal) * 100 : 0}%` }} /></div>
         </div>
         {!current && (
           <div className="empty-state">
-            <h3>{selectedAllWords.length && !words.length ? "Все слова выключены" : "Сессия закончена"}</h3>
-            <p>{selectedAllWords.length && !words.length ? "Включите слова в админке или добавьте новые в выбранные списки." : "Вы прошли выбранные списки. Смените режим или список, чтобы продолжить."}</p>
+            <h3>
+              {!selectedAllWords.length
+                ? "Нет слов"
+                : !selectedAllWords.some((word) => learnedWords.has(word.id))
+                  ? "Нет выученных слов"
+                  : !words.length
+                    ? "Все слова выключены"
+                    : "Сессия закончена"}
+            </h3>
+            <p>
+              {!selectedAllWords.length
+                ? "Выберите список слов."
+                : !selectedAllWords.some((word) => learnedWords.has(word.id))
+                  ? "Сначала выучите слова в разделе Обучение. В тестирование попадают только запомненные слова."
+                  : !words.length
+                    ? "Включите слова в админке или выучите новые."
+                    : "Вы прошли выбранные списки. Смените режим или список, чтобы продолжить."}
+            </p>
             {!!words.length && <button className="primary restart-button" type="button" onClick={restartSession}>Запустить еще раз</button>}
           </div>
         )}
@@ -882,7 +1133,7 @@ function Study({ lists, selectedLists, setSelectedLists, mode, setMode, progress
       <aside className="study-side">
         <GoalCard streak={streak} learned={learnedTotal} done={dailyDone} goal={dailyGoal} />
         <h3>Сегодня</h3>
-        <Metric label="Активных слов" value={String(words.length)} />
+        <Metric label="В тестировании" value={String(words.length)} />
         <Metric label="Осталось" value={String(session.length)} />
         <Metric label="Очередь ошибок" value={String(Object.values(progress).filter((item) => item.lastResult === "unknown" || item.lastResult === "wrong").length)} />
       </aside>
@@ -1067,7 +1318,7 @@ function UsersAdmin({ token, online, currentUser, sync, setNotice }: {
   );
 }
 
-function Admin({ lists, token, online, currentUser, sync, progress, disabledWordIds, persistLists, toggleWordDisabled, setNotice }: {
+function Admin({ lists, token, online, currentUser, sync, progress, disabledWordIds, learnedWordIds, persistLists, toggleWordDisabled, setNotice }: {
   lists: WordList[];
   token: string;
   online: boolean;
@@ -1075,6 +1326,7 @@ function Admin({ lists, token, online, currentUser, sync, progress, disabledWord
   sync: () => Promise<void>;
   progress: Record<string, Progress>;
   disabledWordIds: string[];
+  learnedWordIds: string[];
   persistLists: (lists: WordList[]) => Promise<void>;
   toggleWordDisabled: (wordId: string, disabled: boolean) => Promise<void>;
   setNotice: (notice: string) => void;
@@ -1092,6 +1344,7 @@ function Admin({ lists, token, online, currentUser, sync, progress, disabledWord
   const editableLists = isAdmin ? adminLists : lists;
   const active = editableLists.find((list) => list.id === activeListId) ?? editableLists[0];
   const disabledWords = new Set(disabledWordIds);
+  const learnedWords = new Set(learnedWordIds);
 
   useEffect(() => {
     if (!activeListId && editableLists[0]) setActiveListId(editableLists[0].id);
@@ -1327,6 +1580,7 @@ function Admin({ lists, token, online, currentUser, sync, progress, disabledWord
               const itemProgress = progress[item.id];
               const disabled = disabledWords.has(item.id);
               const mastered = isMasteredForAutoDisable(itemProgress);
+              const learned = learnedWords.has(item.id);
               const editing = editingWordId === item.id;
               return (
                 <div className={disabled ? "word-row disabled" : "word-row"} key={item.id}>
@@ -1359,6 +1613,7 @@ function Admin({ lists, token, online, currentUser, sync, progress, disabledWord
                       <div className="word-stats">
                         <span className="ok">✓ {correctTotal(itemProgress)}</span>
                         <span className="bad">× {wrongTotal(itemProgress)}</span>
+                        {learned && <span>выучено</span>}
                         {mastered && <span>30+</span>}
                       </div>
                       <label className="word-toggle">
@@ -1391,7 +1646,7 @@ function Admin({ lists, token, online, currentUser, sync, progress, disabledWord
   );
 }
 
-function Stats({ lists, progress, queue }: { lists: WordList[]; progress: Record<string, Progress>; queue: ProgressEvent[] }) {
+function Stats({ lists, progress, queue, learnedWordIds }: { lists: WordList[]; progress: Record<string, Progress>; queue: ProgressEvent[]; learnedWordIds: string[] }) {
   const words = lists.flatMap((list) => list.words);
   const known = Object.values(progress).filter((item) => item.knownCount + item.correctCount > 0).length;
   const difficult = Object.values(progress).filter((item) => item.unknownCount + item.wrongCount > 0).length;
@@ -1405,7 +1660,8 @@ function Stats({ lists, progress, queue }: { lists: WordList[]; progress: Record
       </div>
       <div className="stats-grid">
         <Metric label="Всего слов" value={String(words.length)} />
-        <Metric label="Есть успех" value={String(known)} />
+        <Metric label="Выучено" value={String(learnedWordIds.length)} />
+        <Metric label="Есть успех в тестах" value={String(known)} />
         <Metric label="Повторить" value={String(difficult)} />
         <Metric label="Ждет синхронизации" value={String(queue.length)} />
       </div>
@@ -1429,7 +1685,8 @@ function Sidebar({ view, setView, email, currentUser, signOut, online, syncing }
         <b>Palabra</b>
       </div>
       <nav>
-        <NavButton active={view === "study"} onClick={() => setView("study")} icon="▣" label="Учить слова" />
+        <NavButton active={view === "learn"} onClick={() => setView("learn")} icon="◎" label="Обучение" />
+        <NavButton active={view === "test"} onClick={() => setView("test")} icon="▣" label="Тестирование" />
         <NavButton active={view === "admin"} onClick={() => setView("admin")} icon="✎" label="Списки слов" />
         {currentUser?.isAdmin && (
           <NavButton active={view === "users"} onClick={() => setView("users")} icon="☺" label="Пользователи" />
@@ -1446,7 +1703,104 @@ function Sidebar({ view, setView, email, currentUser, signOut, online, syncing }
   );
 }
 
-function Topbar({ online, syncing, sync, notice, signOut }: { online: boolean; syncing: boolean; sync: () => void; notice: string; signOut: () => void }) {
+function ListMultiselect({
+  lists,
+  selectedLists,
+  toggleList,
+  setSelectedLists,
+  countFor,
+}: {
+  lists: WordList[];
+  selectedLists: string[];
+  toggleList: (id: string) => void;
+  setSelectedLists: (ids: string[]) => void;
+  countFor: (list: WordList) => number;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const selected = lists.filter((list) => selectedLists.includes(list.id));
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  const summary =
+    !selected.length
+      ? "Выберите списки"
+      : selected.length <= 2
+        ? selected.map((list) => `${list.icon} ${list.title}`).join(", ")
+        : `${selected.slice(0, 2).map((list) => `${list.icon} ${list.title}`).join(", ")} +${selected.length - 2}`;
+
+  return (
+    <div className={`list-multiselect ${open ? "open" : ""}`} ref={rootRef}>
+      <button
+        type="button"
+        className="list-multiselect-trigger"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+        aria-haspopup="listbox"
+      >
+        <span className="list-multiselect-summary">{summary}</span>
+        <span className="list-multiselect-meta">
+          <small>{selected.length}/{lists.length}</small>
+          <span className="list-multiselect-caret" aria-hidden>▾</span>
+        </span>
+      </button>
+
+      {open && (
+        <div className="list-multiselect-panel" role="listbox" aria-multiselectable="true">
+          <div className="list-multiselect-actions">
+            <button type="button" onClick={() => setSelectedLists(lists.map((list) => list.id))}>Все</button>
+            <button type="button" onClick={() => setSelectedLists([])}>Сбросить</button>
+          </div>
+          <div className="list-multiselect-options">
+            {lists.map((list) => {
+              const checked = selectedLists.includes(list.id);
+              const count = countFor(list);
+              return (
+                <button
+                  key={list.id}
+                  type="button"
+                  role="option"
+                  aria-selected={checked}
+                  className={checked ? "list-option active" : "list-option"}
+                  onClick={() => toggleList(list.id)}
+                >
+                  <span className="list-option-check" aria-hidden>{checked ? "✓" : ""}</span>
+                  <span className="list-option-icon">{list.icon}</span>
+                  <span className="list-option-title">{list.title}</span>
+                  <small>{count} / {list.words.length}</small>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Topbar({ view, online, syncing, sync, notice, signOut }: { view: View; online: boolean; syncing: boolean; sync: () => void; notice: string; signOut: () => void }) {
+  const titles: Record<View, { title: string; subtitle: string }> = {
+    learn: { title: "Обучение", subtitle: "Смотрите перевод и запоминайте слова по порядку." },
+    test: { title: "Тестирование", subtitle: "Проверяйте только уже выученные слова." },
+    admin: { title: "Списки слов", subtitle: "Создавайте темы и управляйте словами." },
+    users: { title: "Пользователи", subtitle: "Создавайте аккаунты и меняйте доступы." },
+    stats: { title: "Статистика", subtitle: "Смотрите прогресс обучения и тестов." },
+  };
+  const current = titles[view] ?? titles.learn;
   return (
     <header className="topbar">
       <div className="mobile-brand">
@@ -1455,8 +1809,8 @@ function Topbar({ online, syncing, sync, notice, signOut }: { online: boolean; s
         <button className="mobile-signout" type="button" onClick={signOut}>Выйти</button>
       </div>
       <div>
-        <h1>Учить слова</h1>
-        <p>Карточки, письмо и повторение до уверенного ответа.</p>
+        <h1>{current.title}</h1>
+        <p>{current.subtitle}</p>
       </div>
       <div className="sync-pill">
         <span className={online ? "dot on" : "dot"} />
@@ -1470,11 +1824,12 @@ function Topbar({ online, syncing, sync, notice, signOut }: { online: boolean; s
 function MobileNav({ view, setView, currentUser }: { view: View; setView: (view: View) => void; currentUser: AuthUser | null }) {
   const isAdmin = Boolean(currentUser?.isAdmin);
   return (
-    <nav className={isAdmin ? "mobile-nav admin" : "mobile-nav"}>
-      <NavButton active={view === "study"} onClick={() => setView("study")} icon="▣" label="Учить" />
+    <nav className={isAdmin ? "mobile-nav admin wide" : "mobile-nav wide"}>
+      <NavButton active={view === "learn"} onClick={() => setView("learn")} icon="◎" label="Учить" />
+      <NavButton active={view === "test"} onClick={() => setView("test")} icon="▣" label="Тест" />
       <NavButton active={view === "admin"} onClick={() => setView("admin")} icon="✎" label="Списки" />
       {isAdmin && <NavButton active={view === "users"} onClick={() => setView("users")} icon="☺" label="Люди" />}
-      <NavButton active={view === "stats"} onClick={() => setView("stats")} icon="▥" label="Статистика" />
+      <NavButton active={view === "stats"} onClick={() => setView("stats")} icon="▥" label="Стат" />
     </nav>
   );
 }
