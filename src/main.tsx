@@ -1237,6 +1237,7 @@ function Test({ lists, language, selectedLists, setSelectedLists, mode, setMode,
               }}
             >
               <span className="card-counter">{currentStep} / {sessionTotal}</span>
+              {flipped && mode === "flash-ru-es" && <span className="card-prompt">{current.ru}</span>}
               <span className="card-word">{!flipped ? (mode === "flash-ru-es" ? current.ru : current.es) : (mode === "flash-ru-es" ? current.es : current.ru)}</span>
               {((flipped && mode === "flash-ru-es") || (!flipped && mode === "flash-es-ru")) && current.esPronunciation && (
                 <span className="pronunciation">{current.esPronunciation}</span>
