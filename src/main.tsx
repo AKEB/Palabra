@@ -147,6 +147,11 @@ function modesFor(language: LanguageInfo): Array<{ id: Mode; title: string; desc
   ];
 }
 
+function localAudioUrl(url?: string) {
+  const match = url?.match(/^https:\/\/flashcardo\.com\/audio\/([^/]+)\/([^/?#]+\.mp3)$/);
+  return match ? `/audio/flashcardo/${match[1]}/${match[2]}` : url || "";
+}
+
 function now() {
   return new Date().toISOString();
 }
@@ -959,7 +964,7 @@ function Learn({ lists, language, selectedLists, setSelectedLists, learnedWordId
                   type="button"
                   onClick={(event) => {
                     event.stopPropagation();
-                    new Audio(current.esAudioUrl).play().catch(() => undefined);
+                    new Audio(localAudioUrl(current.esAudioUrl)).play().catch(() => undefined);
                   }}
                 >
                   ▶ Произношение
@@ -1238,7 +1243,7 @@ function Test({ lists, language, selectedLists, setSelectedLists, mode, setMode,
                   type="button"
                   onClick={(event) => {
                     event.stopPropagation();
-                    new Audio(current.esAudioUrl).play().catch(() => undefined);
+                    new Audio(localAudioUrl(current.esAudioUrl)).play().catch(() => undefined);
                   }}
                 >
                   ▶ Произношение
@@ -1788,7 +1793,7 @@ function Admin({ lists, language, token, online, currentUser, sync, progress, di
                           <button
                             className="ghost audio-inline"
                             type="button"
-                            onClick={() => new Audio(item.esAudioUrl).play().catch(() => undefined)}
+                            onClick={() => new Audio(localAudioUrl(item.esAudioUrl)).play().catch(() => undefined)}
                           >
                             ▶
                           </button>
