@@ -874,23 +874,15 @@ select:focus {
   color: #d97757;
 }
 
-.language-switcher.compact .language-options {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.language-switcher.compact .language-options button {
-  display: grid;
-  place-items: center;
+.language-select {
   min-height: 34px;
-  min-width: 42px;
-  padding: 6px 8px;
-  border-radius: 8px;
-}
-
-.language-switcher.compact .language-options button small {
-  display: none;
+  width: 74px;
+  padding: 0 28px 0 10px;
+  border-color: #dfe5e9;
+  color: #46515f;
+  font-size: 0.84rem;
+  font-weight: 850;
+  background-color: #fff;
 }
 
 .topbar-tools {
@@ -899,14 +891,6 @@ select:focus {
   gap: 12px;
   flex-wrap: wrap;
   justify-content: flex-end;
-}
-
-.mobile-language {
-  display: none;
-}
-
-.language-switcher.mobile-only {
-  display: none;
 }
 
 .accent-keys button:hover {
@@ -1476,7 +1460,7 @@ select:focus {
 
   .mobile-brand {
     display: grid;
-    grid-template-columns: 30px minmax(0, 1fr) auto;
+    grid-template-columns: 30px minmax(0, 1fr) auto auto;
     align-items: center;
     gap: 9px;
     min-width: 0;
@@ -1502,24 +1486,13 @@ select:focus {
     font-weight: 800;
   }
 
-  .topbar > div:not(.mobile-brand):not(.mobile-language) {
+  .topbar > div:not(.mobile-brand) {
     display: none;
   }
 
-  .mobile-language {
-    display: block;
-    min-width: 0;
-  }
-
-  .mobile-language .language-options {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 6px;
-  }
-
-  .mobile-language .language-options button {
-    min-width: 0;
-    width: 100%;
+  .mobile-brand .language-select {
+    width: 66px;
+    min-width: 66px;
   }
 
   .topbar p {

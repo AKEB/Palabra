@@ -2002,10 +2002,8 @@ function Topbar({ view, online, syncing, sync, notice, signOut, language, setLan
       <div className="mobile-brand">
         <span className="app-icon small">ñ</span>
         <b>Palabra</b>
-        <button className="mobile-signout" type="button" onClick={signOut}>Выйти</button>
-      </div>
-      <div className="mobile-language">
         <LanguageSwitcher language={language} setLanguage={setLanguage} compact />
+        <button className="mobile-signout" type="button" onClick={signOut}>Выйти</button>
       </div>
       <div>
         <h1>{current.title}</h1>
@@ -2027,9 +2025,26 @@ function LanguageSwitcher({ language, setLanguage, compact = false }: {
   setLanguage: (code: LanguageCode) => void;
   compact?: boolean;
 }) {
+  if (compact) {
+    return (
+      <select
+        className="language-select"
+        value={language.code}
+        onChange={(event) => setLanguage(event.target.value as LanguageCode)}
+        aria-label="Язык обучения"
+      >
+        {LANGUAGES.map((item) => (
+          <option key={item.code} value={item.code}>
+            {item.short}
+          </option>
+        ))}
+      </select>
+    );
+  }
+
   return (
-    <div className={`language-switcher ${compact ? "compact" : ""}`} role="group" aria-label="Язык обучения">
-      {!compact && <span className="language-label">Язык</span>}
+    <div className="language-switcher" role="group" aria-label="Язык обучения">
+      <span className="language-label">Язык</span>
       <div className="language-options">
         {LANGUAGES.map((item) => (
           <button
@@ -2041,7 +2056,7 @@ function LanguageSwitcher({ language, setLanguage, compact = false }: {
             aria-pressed={item.code === language.code}
           >
             <b>{item.short}</b>
-            {!compact && <small>{item.name}</small>}
+            <small>{item.name}</small>
           </button>
         ))}
       </div>
