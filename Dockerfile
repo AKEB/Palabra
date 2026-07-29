@@ -15,5 +15,6 @@ COPY package*.json ./
 RUN npm ci --omit=dev
 COPY --from=build /app/dist ./dist
 COPY server ./server
+COPY data ./data
 EXPOSE 8080
 CMD ["node", "server/index.mjs"]

@@ -8,6 +8,7 @@ type Word = {
   ru: string;
   es: string;
   esPronunciation?: string;
+  esAudioUrl?: string;
   updatedAt?: string;
 };
 
@@ -16,6 +17,9 @@ type WordList = {
   title: string;
   icon: string;
   color: string;
+  isGlobal?: boolean;
+  userId?: string;
+  ownerEmail?: string;
   updatedAt?: string;
   words: Word[];
 };
@@ -46,8 +50,17 @@ type ProgressEvent = {
 };
 
 type Mode = "flash-ru-es" | "flash-es-ru" | "type-ru-es" | "type-es-ru";
-type View = "study" | "admin" | "stats";
+type View = "study" | "admin" | "users" | "stats";
 type AuthMode = "login" | "register";
+
+type AuthUser = {
+  id: string;
+  email: string;
+  isAdmin: boolean;
+  createdAt?: string;
+};
+
+type ManagedUser = AuthUser;
 
 const STORE = "palabra-store";
 const DB_NAME = "palabra-db";
@@ -60,32 +73,6 @@ const MODES: Array<{ id: Mode; title: string; description: string }> = [
   { id: "flash-es-ru", title: "Карточки ES -> RU", description: "Увидеть испанское, вспомнить русский" },
   { id: "type-ru-es", title: "Письмо RU -> ES", description: "Напечатать испанский перевод" },
   { id: "type-es-ru", title: "Письмо ES -> RU", description: "Напечатать русский перевод" },
-];
-
-const sampleLists: WordList[] = [
-  {
-    id: "demo-food",
-    title: "Еда",
-    icon: "🍔",
-    color: "#ff5a45",
-    words: [
-      { id: "demo-food-1", listId: "demo-food", ru: "яблоко", es: "la manzana", esPronunciation: "ла мансана" },
-      { id: "demo-food-2", listId: "demo-food", ru: "молоко", es: "la leche", esPronunciation: "ла лече" },
-      { id: "demo-food-3", listId: "demo-food", ru: "хлеб", es: "el pan", esPronunciation: "эль пан" },
-      { id: "demo-food-4", listId: "demo-food", ru: "Мне нужен кофе", es: "Necesito un cafe", esPronunciation: "несесито ун кафе" },
-    ],
-  },
-  {
-    id: "demo-travel",
-    title: "Путешествия",
-    icon: "✈️",
-    color: "#087d86",
-    words: [
-      { id: "demo-travel-1", listId: "demo-travel", ru: "аэропорт", es: "el aeropuerto", esPronunciation: "эль аэропуэрто" },
-      { id: "demo-travel-2", listId: "demo-travel", ru: "Где вокзал?", es: "Donde esta la estacion?", esPronunciation: "донде эста ла эстасьон" },
-      { id: "demo-travel-3", listId: "demo-travel", ru: "билет", es: "el billete", esPronunciation: "эль бийете" },
-    ],
-  },
 ];
 
 function now() {
@@ -366,6 +353,7 @@ async function api<T>(path: string, token?: string, init: RequestInit = {}): Pro
 function App() {
   const [token, setToken] = useState(() => localStorage.getItem("palabra-token") || "");
   const [email, setEmail] = useState(() => localStorage.getItem("palabra-email") || "");
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
   const [lists, setLists] = useState<WordList[]>([]);
   const [progress, setProgress] = useState<Record<string, Progress>>({});
   const [queue, setQueue] = useState<ProgressEvent[]>([]);
@@ -385,8 +373,8 @@ function App() {
       const cachedQueue = await dbGet<ProgressEvent[]>(userCacheKey(email, "queue"), []);
       const cachedDisabledWordIds = await dbGet<string[]>(userCacheKey(email, "disabledWordIds"), []);
       const cachedSelectedLists = await dbGet<string[]>(userCacheKey(email, "selectedLists"), []);
-      setLists(cachedLists.length ? cachedLists : sampleLists);
-      const availableLists = cachedLists.length ? cachedLists : sampleLists;
+      setLists(cachedLists);
+      const availableLists = cachedLists;
       const validSelectedLists = cachedSelectedLists.filter((id) => availableLists.some((list) => list.id === id));
       setSelectedLists(validSelectedLists.length ? validSelectedLists : availableLists.slice(0, 1).map((item) => item.id));
       setProgress(cachedProgress);
@@ -446,11 +434,12 @@ function App() {
         await api("/api/sync/progress", token, { method: "POST", body: JSON.stringify({ events: pending }) });
         await persistQueue([]);
       }
-      const data = await api<{ lists: WordList[]; progress: Record<string, Progress>; disabledWordIds: string[]; email: string }>("/api/sync", token);
+      const data = await api<{ lists: WordList[]; progress: Record<string, Progress>; disabledWordIds: string[]; email: string; user: AuthUser }>("/api/sync", token);
       await persistLists(data.lists);
       await persistProgress(mergeProgress(await dbGet<Record<string, Progress>>(userCacheKey(email, "progress"), progress), data.progress));
       await persistDisabledWordIds(data.disabledWordIds ?? []);
       setEmail(data.email);
+      setCurrentUser(data.user);
       localStorage.setItem("palabra-email", data.email);
       setSelectedLists((current) => {
         const validSelected = current.filter((id) => data.lists.some((list) => list.id === id));
@@ -495,6 +484,7 @@ function App() {
     localStorage.removeItem("palabra-email");
     setToken("");
     setEmail("");
+    setCurrentUser(null);
     setLists([]);
     setProgress({});
     setQueue([]);
@@ -504,13 +494,17 @@ function App() {
     setNotice("");
   }
 
+  useEffect(() => {
+    if (view === "users" && !currentUser?.isAdmin) setView("study");
+  }, [view, currentUser?.isAdmin]);
+
   if (!token) {
-    return <AuthScreen setToken={setToken} setEmail={setEmail} online={online} />;
+    return <AuthScreen setToken={setToken} setEmail={setEmail} setCurrentUser={setCurrentUser} online={online} />;
   }
 
   return (
     <div className="shell">
-      <Sidebar view={view} setView={setView} email={email} signOut={signOut} online={online} syncing={syncing} />
+      <Sidebar view={view} setView={setView} email={email} currentUser={currentUser} signOut={signOut} online={online} syncing={syncing} />
       <main className="workspace">
         <Topbar online={online} syncing={syncing} sync={sync} notice={notice} signOut={signOut} />
         {view === "study" && (
@@ -530,6 +524,8 @@ function App() {
             lists={lists}
             token={token}
             online={online}
+            currentUser={currentUser}
+            sync={sync}
             progress={progress}
             disabledWordIds={disabledWordIds}
             persistLists={persistLists}
@@ -537,14 +533,28 @@ function App() {
             setNotice={setNotice}
           />
         )}
+        {view === "users" && currentUser?.isAdmin && (
+          <UsersAdmin
+            token={token}
+            online={online}
+            currentUser={currentUser}
+            sync={sync}
+            setNotice={setNotice}
+          />
+        )}
         {view === "stats" && <Stats lists={lists} progress={progress} queue={queue} />}
       </main>
-      <MobileNav view={view} setView={setView} />
+      <MobileNav view={view} setView={setView} currentUser={currentUser} />
     </div>
   );
 }
 
-function AuthScreen({ setToken, setEmail, online }: { setToken: (token: string) => void; setEmail: (email: string) => void; online: boolean }) {
+function AuthScreen({ setToken, setEmail, setCurrentUser, online }: {
+  setToken: (token: string) => void;
+  setEmail: (email: string) => void;
+  setCurrentUser: (user: AuthUser | null) => void;
+  online: boolean;
+}) {
   const [authMode, setAuthMode] = useState<AuthMode>("login");
   const [emailValue, setEmailValue] = useState("");
   const [password, setPassword] = useState("");
@@ -560,7 +570,7 @@ function AuthScreen({ setToken, setEmail, online }: { setToken: (token: string) 
     setLoading(true);
     setError("");
     try {
-      const data = await api<{ token: string; email: string }>(`/api/auth/${authMode}`, undefined, {
+      const data = await api<{ token: string; email: string; user: AuthUser }>(`/api/auth/${authMode}`, undefined, {
         method: "POST",
         body: JSON.stringify({ email: emailValue, password }),
       });
@@ -568,6 +578,7 @@ function AuthScreen({ setToken, setEmail, online }: { setToken: (token: string) 
       localStorage.setItem("palabra-email", data.email);
       setToken(data.token);
       setEmail(data.email);
+      setCurrentUser(data.user);
     } catch (error) {
       setError(error instanceof Error ? error.message : "Не удалось войти");
     } finally {
@@ -811,7 +822,21 @@ function Study({ lists, selectedLists, setSelectedLists, mode, setMode, progress
             >
               <span className="card-counter">{currentStep} / {sessionTotal}</span>
               <span className="card-word">{!flipped ? (mode === "flash-ru-es" ? current.ru : current.es) : (mode === "flash-ru-es" ? current.es : current.ru)}</span>
-              {flipped && mode === "flash-ru-es" && current.esPronunciation && <span className="pronunciation">{current.esPronunciation}</span>}
+              {((flipped && mode === "flash-ru-es") || (!flipped && mode === "flash-es-ru")) && current.esPronunciation && (
+                <span className="pronunciation">{current.esPronunciation}</span>
+              )}
+              {((flipped && mode === "flash-ru-es") || (!flipped && mode === "flash-es-ru")) && current.esAudioUrl && (
+                <button
+                  className="audio-button"
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    new Audio(current.esAudioUrl).play().catch(() => undefined);
+                  }}
+                >
+                  ▶ Произношение
+                </button>
+              )}
               <span className="hint">Нажмите, чтобы перевернуть</span>
             </button>
             {flipped && (
@@ -892,42 +917,213 @@ function GoalCard({ streak, learned, done, goal }: { streak: number; learned: nu
   );
 }
 
-function Admin({ lists, token, online, progress, disabledWordIds, persistLists, toggleWordDisabled, setNotice }: {
+function UsersAdmin({ token, online, currentUser, sync, setNotice }: {
+  token: string;
+  online: boolean;
+  currentUser: AuthUser;
+  sync: () => Promise<void>;
+  setNotice: (notice: string) => void;
+}) {
+  const [users, setUsers] = useState<ManagedUser[]>([]);
+  const [activeUserId, setActiveUserId] = useState("");
+  const [newUser, setNewUser] = useState({ email: "", password: "", isAdmin: false });
+  const [userEdit, setUserEdit] = useState({ email: "", isAdmin: false });
+  const [passwordReset, setPasswordReset] = useState("");
+  const [confirmDeleteUser, setConfirmDeleteUser] = useState(false);
+  const activeUser = users.find((item) => item.id === activeUserId) ?? users[0];
+
+  useEffect(() => {
+    if (!token || !online) return;
+    api<{ users: ManagedUser[] }>("/api/admin/users", token)
+      .then((data) => setUsers(data.users))
+      .catch((error) => setNotice(error instanceof Error ? error.message : "Не удалось загрузить пользователей"));
+  }, [token, online]);
+
+  useEffect(() => {
+    if (!activeUserId && users[0]) setActiveUserId(users[0].id);
+  }, [users, activeUserId]);
+
+  useEffect(() => {
+    if (activeUser) {
+      setUserEdit({ email: activeUser.email, isAdmin: activeUser.isAdmin });
+      setPasswordReset("");
+      setConfirmDeleteUser(false);
+    }
+  }, [activeUser?.id, activeUser?.email, activeUser?.isAdmin]);
+
+  async function createUser(event: React.FormEvent) {
+    event.preventDefault();
+    if (!online) return;
+    const data = await api<{ user: ManagedUser }>("/api/admin/users", token, { method: "POST", body: JSON.stringify(newUser) });
+    const nextUsers = [...users, data.user].sort((left, right) => left.email.localeCompare(right.email));
+    setUsers(nextUsers);
+    setActiveUserId(data.user.id);
+    setNewUser({ email: "", password: "", isAdmin: false });
+    setNotice("Пользователь создан");
+  }
+
+  async function updateUser(event: React.FormEvent) {
+    event.preventDefault();
+    if (!online || !activeUser) return;
+    const data = await api<{ user: ManagedUser }>(`/api/admin/users/${activeUser.id}`, token, { method: "PATCH", body: JSON.stringify(userEdit) });
+    setUsers(users.map((item) => item.id === data.user.id ? data.user : item));
+    if (activeUser.id === currentUser.id) await sync();
+    setNotice("Данные пользователя обновлены");
+  }
+
+  async function resetUserPassword(event: React.FormEvent) {
+    event.preventDefault();
+    if (!online || !activeUser) return;
+    await api(`/api/admin/users/${activeUser.id}/password`, token, { method: "POST", body: JSON.stringify({ password: passwordReset }) });
+    setPasswordReset("");
+    setNotice("Пароль пользователя обновлен");
+  }
+
+  async function deleteUser() {
+    if (!online || !activeUser) return;
+    await api(`/api/admin/users/${activeUser.id}`, token, { method: "DELETE" });
+    const nextUsers = users.filter((item) => item.id !== activeUser.id);
+    setUsers(nextUsers);
+    setActiveUserId(nextUsers[0]?.id ?? "");
+    setConfirmDeleteUser(false);
+    setNotice("Пользователь удален");
+  }
+
+  return (
+    <section className="admin-layout">
+      <div className="section-head">
+        <div>
+          <p className="eyebrow">Админка</p>
+          <h2>Пользователи</h2>
+        </div>
+      </div>
+      {!online && <div className="offline-note">Управление пользователями доступно только онлайн.</div>}
+      <div className="panel admin-users-panel">
+        <div className="admin-users-grid">
+          <div className="list-admin">
+            {users.map((item) => (
+              <button key={item.id} className={activeUser?.id === item.id ? "list-row active user-row" : "list-row user-row"} onClick={() => setActiveUserId(item.id)}>
+                <span>{item.isAdmin ? "★" : "•"}</span>
+                <div className="list-row-meta">
+                  <b>{item.email}</b>
+                  <small>{item.isAdmin ? "Администратор системы" : "Пользователь"}</small>
+                </div>
+              </button>
+            ))}
+          </div>
+          <div className="admin-user-forms">
+            <form className="word-form admin-form-card" onSubmit={createUser}>
+              <h3>Новый пользователь</h3>
+              <input type="email" value={newUser.email} onChange={(event) => setNewUser({ ...newUser, email: event.target.value })} placeholder="Email" required />
+              <input type="password" value={newUser.password} onChange={(event) => setNewUser({ ...newUser, password: event.target.value })} minLength={6} placeholder="Пароль" required />
+              <label className="checkbox-row">
+                <input type="checkbox" checked={newUser.isAdmin} onChange={(event) => setNewUser({ ...newUser, isAdmin: event.target.checked })} />
+                <span>Сделать администратором</span>
+              </label>
+              <button className="primary wide" disabled={!online}>Создать пользователя</button>
+            </form>
+            {activeUser && (
+              <>
+                <form className="word-form admin-form-card" onSubmit={updateUser}>
+                  <h3>Данные пользователя</h3>
+                  <input type="email" value={userEdit.email} onChange={(event) => setUserEdit({ ...userEdit, email: event.target.value })} placeholder="Email" required />
+                  <label className="checkbox-row">
+                    <input type="checkbox" checked={userEdit.isAdmin} onChange={(event) => setUserEdit({ ...userEdit, isAdmin: event.target.checked })} />
+                    <span>Администратор системы</span>
+                  </label>
+                  <button className="ghost wide" disabled={!online}>Сохранить данные</button>
+                </form>
+                <form className="word-form admin-form-card" onSubmit={resetUserPassword}>
+                  <h3>Новый пароль</h3>
+                  <input type="password" value={passwordReset} onChange={(event) => setPasswordReset(event.target.value)} minLength={6} placeholder="Минимум 6 символов" required />
+                  <button className="ghost wide" disabled={!online}>Сменить пароль</button>
+                </form>
+                <div className="admin-form-card">
+                  <h3>Удаление</h3>
+                  {activeUser.id === currentUser.id ? (
+                    <p className="admin-hint">Свой аккаунт удалить нельзя.</p>
+                  ) : !confirmDeleteUser ? (
+                    <button className="danger outline wide" type="button" onClick={() => setConfirmDeleteUser(true)} disabled={!online}>
+                      Удалить пользователя
+                    </button>
+                  ) : (
+                    <div className="confirm-delete">
+                      <p>Удалить пользователя "{activeUser.email}" вместе с его личными списками?</p>
+                      <div>
+                        <button className="danger" type="button" onClick={() => deleteUser().catch((error) => setNotice(error instanceof Error ? error.message : "Не удалось удалить"))}>
+                          Удалить навсегда
+                        </button>
+                        <button className="ghost" type="button" onClick={() => setConfirmDeleteUser(false)}>Отмена</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function Admin({ lists, token, online, currentUser, sync, progress, disabledWordIds, persistLists, toggleWordDisabled, setNotice }: {
   lists: WordList[];
   token: string;
   online: boolean;
+  currentUser: AuthUser | null;
+  sync: () => Promise<void>;
   progress: Record<string, Progress>;
   disabledWordIds: string[];
   persistLists: (lists: WordList[]) => Promise<void>;
   toggleWordDisabled: (wordId: string, disabled: boolean) => Promise<void>;
   setNotice: (notice: string) => void;
 }) {
+  const isAdmin = Boolean(currentUser?.isAdmin);
   const [activeListId, setActiveListId] = useState(lists[0]?.id ?? "");
-  const [draftList, setDraftList] = useState({ title: "", icon: "📚", color: "#087d86" });
-  const [listEdit, setListEdit] = useState({ title: "", icon: "📚" });
+  const [draftList, setDraftList] = useState({ title: "", icon: "📚", color: "#087d86", isGlobal: false });
+  const [listEdit, setListEdit] = useState({ title: "", icon: "📚", isGlobal: false });
   const [word, setWord] = useState({ ru: "", es: "", esPronunciation: "" });
   const [editingWordId, setEditingWordId] = useState("");
   const [wordEdit, setWordEdit] = useState({ ru: "", es: "", esPronunciation: "" });
   const [confirmDeleteList, setConfirmDeleteList] = useState(false);
+  const [adminLists, setAdminLists] = useState<WordList[]>([]);
   const importInputRef = useRef<HTMLInputElement | null>(null);
-  const active = lists.find((list) => list.id === activeListId) ?? lists[0];
+  const editableLists = isAdmin ? adminLists : lists;
+  const active = editableLists.find((list) => list.id === activeListId) ?? editableLists[0];
   const disabledWords = new Set(disabledWordIds);
 
   useEffect(() => {
-    if (!activeListId && lists[0]) setActiveListId(lists[0].id);
-  }, [lists, activeListId]);
+    if (!activeListId && editableLists[0]) setActiveListId(editableLists[0].id);
+  }, [editableLists, activeListId]);
 
   useEffect(() => {
-    if (active) setListEdit({ title: active.title, icon: active.icon });
+    if (active) setListEdit({ title: active.title, icon: active.icon, isGlobal: Boolean(active.isGlobal) });
     setConfirmDeleteList(false);
-  }, [active?.id, active?.title, active?.icon]);
+  }, [active?.id, active?.title, active?.icon, active?.isGlobal]);
+
+  useEffect(() => {
+    if (!isAdmin) {
+      setAdminLists([]);
+      return;
+    }
+    if (!token || !online) return;
+    api<{ lists: WordList[] }>("/api/admin/lists", token)
+      .then((data) => setAdminLists(data.lists))
+      .catch((error) => setNotice(error instanceof Error ? error.message : "Не удалось загрузить списки пользователей"));
+  }, [isAdmin, token, online]);
 
   async function saveList(event: React.FormEvent) {
     event.preventDefault();
     if (!online) return;
     const created = await api<WordList>("/api/lists", token, { method: "POST", body: JSON.stringify(draftList) });
-    await persistLists([...lists, created]);
-    setDraftList({ title: "", icon: "📚", color: "#087d86" });
+    if (isAdmin) {
+      setAdminLists([created, ...adminLists]);
+      await sync();
+    } else {
+      await persistLists([...lists, created]);
+    }
+    setDraftList({ title: "", icon: "📚", color: "#087d86", isGlobal: false });
     setActiveListId(created.id);
     setNotice("Список создан");
   }
@@ -936,15 +1132,25 @@ function Admin({ lists, token, online, progress, disabledWordIds, persistLists, 
     event.preventDefault();
     if (!online || !active) return;
     const updated = await api<WordList>(`/api/lists/${active.id}`, token, { method: "PATCH", body: JSON.stringify(listEdit) });
-    await persistLists(lists.map((list) => list.id === active.id ? { ...updated, words: list.words } : list));
+    if (isAdmin) {
+      setAdminLists(editableLists.map((list) => list.id === active.id ? { ...updated, words: updated.words } : list));
+      await sync();
+    } else {
+      await persistLists(lists.map((list) => list.id === active.id ? { ...updated, words: list.words } : list));
+    }
     setNotice("Список обновлен");
   }
 
   async function deleteList() {
     if (!online || !active) return;
     await api(`/api/lists/${active.id}`, token, { method: "DELETE" });
-    const nextLists = lists.filter((list) => list.id !== active.id);
-    await persistLists(nextLists);
+    const nextLists = editableLists.filter((list) => list.id !== active.id);
+    if (isAdmin) {
+      setAdminLists(nextLists);
+      await sync();
+    } else {
+      await persistLists(nextLists);
+    }
     setActiveListId(nextLists[0]?.id ?? "");
     setConfirmDeleteList(false);
     setNotice("Список удален");
@@ -971,7 +1177,12 @@ function Admin({ lists, token, online, progress, disabledWordIds, persistLists, 
       )));
       created.push(...wordsBatch);
     }
-    await persistLists(lists.map((list) => list.id === active.id ? { ...list, words: [...list.words, ...created] } : list));
+    if (isAdmin) {
+      setAdminLists(editableLists.map((list) => list.id === active.id ? { ...list, words: [...list.words, ...created] } : list));
+      await sync();
+    } else {
+      await persistLists(lists.map((list) => list.id === active.id ? { ...list, words: [...list.words, ...created] } : list));
+    }
     setNotice(`Импортировано слов: ${created.length}`);
   }
 
@@ -979,7 +1190,12 @@ function Admin({ lists, token, online, progress, disabledWordIds, persistLists, 
     event.preventDefault();
     if (!online || !active) return;
     const created = await api<Word>(`/api/lists/${active.id}/words`, token, { method: "POST", body: JSON.stringify(word) });
-    await persistLists(lists.map((list) => list.id === active.id ? { ...list, words: [...list.words, created] } : list));
+    if (isAdmin) {
+      setAdminLists(editableLists.map((list) => list.id === active.id ? { ...list, words: [...list.words, created] } : list));
+      await sync();
+    } else {
+      await persistLists(lists.map((list) => list.id === active.id ? { ...list, words: [...list.words, created] } : list));
+    }
     setWord({ ru: "", es: "", esPronunciation: "" });
     setNotice("Слово добавлено");
   }
@@ -1002,7 +1218,12 @@ function Admin({ lists, token, online, progress, disabledWordIds, persistLists, 
     event.preventDefault();
     if (!online || !active || !editingWordId) return;
     const updated = await api<Word>(`/api/words/${editingWordId}`, token, { method: "PATCH", body: JSON.stringify(wordEdit) });
-    await persistLists(lists.map((list) => list.id === active.id ? { ...list, words: list.words.map((item) => item.id === updated.id ? updated : item) } : list));
+    if (isAdmin) {
+      setAdminLists(editableLists.map((list) => list.id === active.id ? { ...list, words: list.words.map((item) => item.id === updated.id ? updated : item) } : list));
+      await sync();
+    } else {
+      await persistLists(lists.map((list) => list.id === active.id ? { ...list, words: list.words.map((item) => item.id === updated.id ? updated : item) } : list));
+    }
     cancelWordEdit();
     setNotice("Слово обновлено");
   }
@@ -1010,14 +1231,19 @@ function Admin({ lists, token, online, progress, disabledWordIds, persistLists, 
   async function deleteWord(wordId: string) {
     if (!online || !active) return;
     await api(`/api/words/${wordId}`, token, { method: "DELETE" });
-    await persistLists(lists.map((list) => list.id === active.id ? { ...list, words: list.words.filter((item) => item.id !== wordId) } : list));
+    if (isAdmin) {
+      setAdminLists(editableLists.map((list) => list.id === active.id ? { ...list, words: list.words.filter((item) => item.id !== wordId) } : list));
+      await sync();
+    } else {
+      await persistLists(lists.map((list) => list.id === active.id ? { ...list, words: list.words.filter((item) => item.id !== wordId) } : list));
+    }
   }
 
   return (
     <section className="admin-layout">
       <div className="section-head">
         <div>
-          <p className="eyebrow">Админка</p>
+          <p className="eyebrow">{isAdmin ? "Админка" : "Списки"}</p>
           <h2>Списки слов</h2>
         </div>
       </div>
@@ -1026,9 +1252,14 @@ function Admin({ lists, token, online, progress, disabledWordIds, persistLists, 
         <div className="panel">
           <h3>Темы</h3>
           <div className="list-admin">
-            {lists.map((list) => (
+            {editableLists.map((list) => (
               <button key={list.id} className={active?.id === list.id ? "list-row active" : "list-row"} onClick={() => setActiveListId(list.id)}>
-                <span>{list.icon}</span><b>{list.title}</b><small>{list.words.filter((item) => !disabledWords.has(item.id)).length} / {list.words.length}</small>
+                <span>{list.icon}</span>
+                <div className="list-row-meta">
+                  <b>{list.title}</b>
+                  <small>{list.isGlobal ? "Глобальный" : list.ownerEmail ?? "Личный список"}</small>
+                </div>
+                <small>{list.words.filter((item) => !disabledWords.has(item.id)).length} / {list.words.length}</small>
               </button>
             ))}
           </div>
@@ -1037,16 +1268,32 @@ function Admin({ lists, token, online, progress, disabledWordIds, persistLists, 
             <input value={draftList.title} onChange={(event) => setDraftList({ ...draftList, title: event.target.value })} placeholder="Новый список" required />
             <button className="primary" disabled={!online}>+</button>
           </form>
+          {isAdmin && (
+            <label className="checkbox-row">
+              <input type="checkbox" checked={draftList.isGlobal} onChange={(event) => setDraftList({ ...draftList, isGlobal: event.target.checked })} />
+              <span>Сразу сделать список глобальным</span>
+            </label>
+          )}
         </div>
         <div className="panel">
           <h3>{active ? `${active.icon} ${active.title}` : "Слова"}</h3>
           {active && (
             <div className="list-settings">
+              <div className="list-owner-line">
+                <span>{active.isGlobal ? "Виден всем пользователям" : "Личный список"}</span>
+                {active.ownerEmail && <small>Владелец: {active.ownerEmail}</small>}
+              </div>
               <form className="list-edit-form" onSubmit={updateList}>
                 <input value={listEdit.icon} onChange={(event) => setListEdit({ ...listEdit, icon: event.target.value })} aria-label="Иконка списка" />
                 <input value={listEdit.title} onChange={(event) => setListEdit({ ...listEdit, title: event.target.value })} placeholder="Название списка" required />
                 <button className="ghost" disabled={!online}>Сохранить</button>
               </form>
+              {isAdmin && (
+                <label className="checkbox-row">
+                  <input type="checkbox" checked={listEdit.isGlobal} onChange={(event) => setListEdit({ ...listEdit, isGlobal: event.target.checked })} />
+                  <span>Глобальный список, виден всем пользователям</span>
+                </label>
+              )}
               <div className="list-tools">
                 <button className="ghost" type="button" onClick={exportActiveList} disabled={!active?.words.length}>Экспорт CSV</button>
                 <button className="ghost" type="button" onClick={() => importInputRef.current?.click()} disabled={!online || !active}>Импорт CSV</button>
@@ -1096,7 +1343,19 @@ function Admin({ lists, token, online, progress, disabledWordIds, persistLists, 
                   ) : (
                     <>
                       <div><b>{item.ru}</b></div>
-                      <div><b>{item.es}</b><small>{item.esPronunciation}</small></div>
+                      <div>
+                        <b>{item.es}</b>
+                        <small>{item.esPronunciation}</small>
+                        {item.esAudioUrl && (
+                          <button
+                            className="ghost audio-inline"
+                            type="button"
+                            onClick={() => new Audio(item.esAudioUrl).play().catch(() => undefined)}
+                          >
+                            ▶
+                          </button>
+                        )}
+                      </div>
                       <div className="word-stats">
                         <span className="ok">✓ {correctTotal(itemProgress)}</span>
                         <span className="bad">× {wrongTotal(itemProgress)}</span>
@@ -1154,10 +1413,11 @@ function Stats({ lists, progress, queue }: { lists: WordList[]; progress: Record
   );
 }
 
-function Sidebar({ view, setView, email, signOut, online, syncing }: {
+function Sidebar({ view, setView, email, currentUser, signOut, online, syncing }: {
   view: View;
   setView: (view: View) => void;
   email: string;
+  currentUser: AuthUser | null;
   signOut: () => void;
   online: boolean;
   syncing: boolean;
@@ -1171,11 +1431,15 @@ function Sidebar({ view, setView, email, signOut, online, syncing }: {
       <nav>
         <NavButton active={view === "study"} onClick={() => setView("study")} icon="▣" label="Учить слова" />
         <NavButton active={view === "admin"} onClick={() => setView("admin")} icon="✎" label="Списки слов" />
+        {currentUser?.isAdmin && (
+          <NavButton active={view === "users"} onClick={() => setView("users")} icon="☺" label="Пользователи" />
+        )}
         <NavButton active={view === "stats"} onClick={() => setView("stats")} icon="▥" label="Статистика" />
       </nav>
       <div className="sidebar-footer">
         <span className={online ? "status online" : "status"}>{syncing ? "Синхронизация" : online ? "Онлайн" : "Офлайн"}</span>
         <small>{email}</small>
+        <small>{currentUser?.isAdmin ? "Администратор системы" : "Пользователь"}</small>
         <button className="ghost" onClick={signOut}>Выйти</button>
       </div>
     </aside>
@@ -1203,11 +1467,13 @@ function Topbar({ online, syncing, sync, notice, signOut }: { online: boolean; s
   );
 }
 
-function MobileNav({ view, setView }: { view: View; setView: (view: View) => void }) {
+function MobileNav({ view, setView, currentUser }: { view: View; setView: (view: View) => void; currentUser: AuthUser | null }) {
+  const isAdmin = Boolean(currentUser?.isAdmin);
   return (
-    <nav className="mobile-nav">
+    <nav className={isAdmin ? "mobile-nav admin" : "mobile-nav"}>
       <NavButton active={view === "study"} onClick={() => setView("study")} icon="▣" label="Учить" />
       <NavButton active={view === "admin"} onClick={() => setView("admin")} icon="✎" label="Списки" />
+      {isAdmin && <NavButton active={view === "users"} onClick={() => setView("users")} icon="☺" label="Люди" />}
       <NavButton active={view === "stats"} onClick={() => setView("stats")} icon="▥" label="Статистика" />
     </nav>
   );

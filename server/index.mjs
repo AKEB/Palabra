@@ -1,5 +1,5 @@
 import { createHmac, pbkdf2Sync, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { createReadStream, existsSync } from "node:fs";
+import { createReadStream, existsSync, readFileSync } from "node:fs";
 import { extname, join, normalize } from "node:path";
 import { createServer } from "node:http";
 import pg from "pg";
@@ -9,34 +9,12 @@ const PORT = Number(process.env.PORT || 8080);
 const JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-me";
 const DATABASE_URL = process.env.DATABASE_URL || "postgres://palabra:palabra@localhost:5432/palabra";
 const publicDir = join(process.cwd(), "dist");
+const flashcardoSeedPath = join(process.cwd(), "data", "flashcardo-topics.json");
 
 const pool = new Pool({ connectionString: DATABASE_URL });
 
-const seedLists = [
-  {
-    title: "Еда",
-    icon: "🍔",
-    color: "#ff5a45",
-    words: [
-      ["яблоко", "la manzana", "ла мансана"],
-      ["молоко", "la leche", "ла лече"],
-      ["хлеб", "el pan", "эль пан"],
-      ["Мне нужен кофе", "Necesito un cafe", "несесито ун кафе"],
-    ],
-  },
-  {
-    title: "Путешествия",
-    icon: "✈️",
-    color: "#087d86",
-    words: [
-      ["аэропорт", "el aeropuerto", "эль аэропуэрто"],
-      ["Где вокзал?", "Donde esta la estacion?", "донде эста ла эстасьон"],
-      ["билет", "el billete", "эль бийете"],
-    ],
-  },
-];
-
 await initDb();
+await seedFlashcardoGlobalLists();
 
 createServer(async (request, response) => {
   try {
@@ -60,6 +38,7 @@ async function initDb() {
       email text not null unique,
       password_hash text not null,
       salt text not null,
+      is_admin boolean not null default false,
       created_at timestamptz not null default now()
     );
 
@@ -69,6 +48,8 @@ async function initDb() {
       title text not null,
       icon text not null default '📚',
       color text not null default '#087d86',
+      is_global boolean not null default false,
+      source text not null default '',
       updated_at timestamptz not null default now()
     );
 
@@ -78,6 +59,7 @@ async function initDb() {
       ru text not null,
       es text not null,
       es_pronunciation text not null default '',
+      es_audio_url text not null default '',
       updated_at timestamptz not null default now()
     );
 
@@ -105,12 +87,82 @@ async function initDb() {
       primary key (user_id, word_id)
     );
   `);
+  await pool.query("alter table users add column if not exists is_admin boolean not null default false");
+  await pool.query("alter table word_lists add column if not exists is_global boolean not null default false");
+  await pool.query("alter table word_lists add column if not exists source text not null default ''");
+  await pool.query("alter table words add column if not exists es_audio_url text not null default ''");
+  await pool.query(`
+    update users
+    set is_admin = true
+    where id = (
+      select id
+      from users
+      where not exists (select 1 from users admins where admins.is_admin = true)
+      order by created_at asc
+      limit 1
+    )
+  `);
   await pool.query("alter table progress add column if not exists activity_dates jsonb not null default '[]'::jsonb");
   await pool.query("alter table progress add column if not exists mastery_written_correct integer not null default 0");
   await pool.query("alter table progress add column if not exists mastery_written_wrong integer not null default 0");
   await pool.query("alter table progress add column if not exists mastery_oral_correct integer not null default 0");
   await pool.query("alter table progress add column if not exists mastery_oral_wrong integer not null default 0");
   await pool.query("alter table words drop column if exists ru_pronunciation");
+}
+
+async function seedFlashcardoGlobalLists() {
+  if (!existsSync(flashcardoSeedPath)) {
+    console.log("Flashcardo seed file not found, skip global lists import");
+    return;
+  }
+  const adminResult = await pool.query("select id from users where is_admin = true order by created_at asc limit 1");
+  const adminId = adminResult.rows[0]?.id;
+  if (!adminId) {
+    console.log("No admin user yet, skip Flashcardo global lists import");
+    return;
+  }
+  const existing = await pool.query("select 1 from word_lists where source = 'flashcardo' limit 1");
+  if (existing.rowCount > 0) {
+    console.log("Flashcardo global lists already imported");
+    return;
+  }
+
+  const payload = JSON.parse(readFileSync(flashcardoSeedPath, "utf8"));
+  const lists = Array.isArray(payload.lists) ? payload.lists : [];
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    for (const list of lists) {
+      const listId = randomUUID();
+      await client.query(
+        "insert into word_lists (id, user_id, title, icon, color, is_global, source) values ($1, $2, $3, $4, $5, true, 'flashcardo')",
+        [listId, adminId, String(list.title || "").trim(), String(list.icon || "📚").slice(0, 8), String(list.color || "#087d86")]
+      );
+      for (const word of list.words || []) {
+        const ru = String(word.ru || "").trim();
+        const es = String(word.es || "").trim();
+        if (!ru || !es) continue;
+        await client.query(
+          "insert into words (id, list_id, ru, es, es_pronunciation, es_audio_url) values ($1, $2, $3, $4, $5, $6)",
+          [
+            randomUUID(),
+            listId,
+            ru,
+            es,
+            String(word.esPronunciation || ""),
+            String(word.esAudioUrl || ""),
+          ]
+        );
+      }
+    }
+    await client.query("commit");
+    console.log(`Imported ${lists.length} Flashcardo global lists`);
+  } catch (error) {
+    await client.query("rollback").catch(() => undefined);
+    console.error("Flashcardo import failed", error);
+  } finally {
+    client.release();
+  }
 }
 
 async function handleApi(request, response, url) {
@@ -123,10 +175,12 @@ async function handleApi(request, response, url) {
     const passwordHash = hashPassword(password, salt);
     const userId = randomUUID();
     const client = await pool.connect();
+    let isAdmin = false;
     try {
       await client.query("begin");
-      await client.query("insert into users (id, email, password_hash, salt) values ($1, $2, $3, $4)", [userId, email, passwordHash, salt]);
-      await seedUser(userId, client);
+      const usersCountResult = await client.query("select count(*)::int as count from users");
+      isAdmin = Number(usersCountResult.rows[0]?.count ?? 0) === 0;
+      await client.query("insert into users (id, email, password_hash, salt, is_admin) values ($1, $2, $3, $4, $5)", [userId, email, passwordHash, salt, isAdmin]);
       await client.query("commit");
     } catch (error) {
       await client.query("rollback").catch(() => undefined);
@@ -136,7 +190,7 @@ async function handleApi(request, response, url) {
     } finally {
       client.release();
     }
-    return sendJson(response, 201, { token: signToken({ sub: userId, email }), email });
+    return sendJson(response, 201, createAuthPayload({ id: userId, email, is_admin: isAdmin }));
   }
 
   if (request.method === "POST" && url.pathname === "/api/auth/login") {
@@ -146,7 +200,7 @@ async function handleApi(request, response, url) {
     const { rows } = await pool.query("select * from users where email = $1", [email]);
     const user = rows[0];
     if (!user || !verifyPassword(password, user.salt, user.password_hash)) return sendJson(response, 401, { error: "Неверный email или пароль" });
-    return sendJson(response, 200, { token: signToken({ sub: user.id, email: user.email }), email: user.email });
+    return sendJson(response, 200, createAuthPayload(user));
   }
 
   const user = await requireUser(request, response);
@@ -154,7 +208,7 @@ async function handleApi(request, response, url) {
 
   if (request.method === "GET" && url.pathname === "/api/sync") {
     const data = await getUserData(user.sub);
-    return sendJson(response, 200, { ...data, email: user.email });
+    return sendJson(response, 200, { ...data, email: user.email, user: mapUser(user) });
   }
 
   if (request.method === "POST" && url.pathname === "/api/sync/progress") {
@@ -219,13 +273,95 @@ async function handleApi(request, response, url) {
     return sendJson(response, 200, { ok: true });
   }
 
+  if (request.method === "GET" && url.pathname === "/api/admin/users") {
+    if (!requireAdmin(user, response)) return;
+    const { rows } = await pool.query("select id, email, is_admin, created_at from users order by created_at asc");
+    return sendJson(response, 200, { users: rows.map(mapUser) });
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/admin/lists") {
+    if (!requireAdmin(user, response)) return;
+    return sendJson(response, 200, { lists: await getAdminLists() });
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/admin/users") {
+    if (!requireAdmin(user, response)) return;
+    const body = await readJson(request);
+    const email = String(body.email || "").trim().toLowerCase();
+    const password = String(body.password || "");
+    const isAdmin = Boolean(body.isAdmin);
+    if (!email.includes("@") || password.length < 6) return sendJson(response, 400, { error: "Проверьте email и пароль" });
+    const salt = randomBytes(16).toString("hex");
+    const passwordHash = hashPassword(password, salt);
+    const userId = randomUUID();
+    const client = await pool.connect();
+    try {
+      await client.query("begin");
+      await client.query("insert into users (id, email, password_hash, salt, is_admin) values ($1, $2, $3, $4, $5)", [userId, email, passwordHash, salt, isAdmin]);
+      await client.query("commit");
+    } catch (error) {
+      await client.query("rollback").catch(() => undefined);
+      if (error?.code === "23505") return sendJson(response, 409, { error: "Такой email уже зарегистрирован" });
+      console.error("Admin create user failed", error);
+      return sendJson(response, 500, { error: "Не удалось создать пользователя" });
+    } finally {
+      client.release();
+    }
+    return sendJson(response, 201, { user: mapUser({ id: userId, email, is_admin: isAdmin, created_at: new Date().toISOString() }) });
+  }
+
+  const adminUserMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)$/);
+  if (request.method === "PATCH" && adminUserMatch) {
+    if (!requireAdmin(user, response)) return;
+    const targetUserId = adminUserMatch[1];
+    const body = await readJson(request);
+    const email = String(body.email || "").trim().toLowerCase();
+    const isAdmin = Boolean(body.isAdmin);
+    if (!email.includes("@")) return sendJson(response, 400, { error: "Укажите корректный email" });
+    if (!isAdmin && !(await hasAnotherAdmin(targetUserId))) {
+      return sendJson(response, 400, { error: "В системе должен остаться хотя бы один администратор" });
+    }
+    const { rows } = await pool.query(
+      "update users set email = $1, is_admin = $2 where id = $3 returning id, email, is_admin, created_at",
+      [email, isAdmin, targetUserId]
+    );
+    if (!rows[0]) return sendJson(response, 404, { error: "Пользователь не найден" });
+    return sendJson(response, 200, { user: mapUser(rows[0]) });
+  }
+
+  if (request.method === "DELETE" && adminUserMatch) {
+    if (!requireAdmin(user, response)) return;
+    const targetUserId = adminUserMatch[1];
+    if (targetUserId === user.sub) return sendJson(response, 400, { error: "Нельзя удалить свой собственный аккаунт" });
+    if (!(await hasAnotherAdmin(targetUserId))) {
+      return sendJson(response, 400, { error: "В системе должен остаться хотя бы один администратор" });
+    }
+    const { rowCount } = await pool.query("delete from users where id = $1", [targetUserId]);
+    if (!rowCount) return sendJson(response, 404, { error: "Пользователь не найден" });
+    return sendJson(response, 200, { ok: true });
+  }
+
+  const adminPasswordMatch = url.pathname.match(/^\/api\/admin\/users\/([^/]+)\/password$/);
+  if (request.method === "POST" && adminPasswordMatch) {
+    if (!requireAdmin(user, response)) return;
+    const targetUserId = adminPasswordMatch[1];
+    const body = await readJson(request);
+    const password = String(body.password || "");
+    if (password.length < 6) return sendJson(response, 400, { error: "Пароль должен быть не короче 6 символов" });
+    const salt = randomBytes(16).toString("hex");
+    const passwordHash = hashPassword(password, salt);
+    const { rowCount } = await pool.query("update users set password_hash = $1, salt = $2 where id = $3", [passwordHash, salt, targetUserId]);
+    if (!rowCount) return sendJson(response, 404, { error: "Пользователь не найден" });
+    return sendJson(response, 200, { ok: true });
+  }
+
   if (request.method === "POST" && url.pathname === "/api/lists") {
     const body = await readJson(request);
     const title = String(body.title || "").trim();
     if (!title) return sendJson(response, 400, { error: "Название списка обязательно" });
     const { rows } = await pool.query(
-      "insert into word_lists (id, user_id, title, icon, color) values ($1, $2, $3, $4, $5) returning *",
-      [randomUUID(), user.sub, title, String(body.icon || "📚").slice(0, 8), String(body.color || "#087d86")]
+      "insert into word_lists (id, user_id, title, icon, color, is_global) values ($1, $2, $3, $4, $5, $6) returning *",
+      [randomUUID(), user.sub, title, String(body.icon || "📚").slice(0, 8), String(body.color || "#087d86"), user.isAdmin && Boolean(body.isGlobal)]
     );
     return sendJson(response, 201, mapList(rows[0], []));
   }
@@ -233,40 +369,42 @@ async function handleApi(request, response, url) {
   const listMatch = url.pathname.match(/^\/api\/lists\/([^/]+)$/);
   if (request.method === "PATCH" && listMatch) {
     const listId = listMatch[1];
+    if (!(await canEditList(user, listId))) return sendJson(response, 404, { error: "Список не найден" });
     const body = await readJson(request);
     const title = String(body.title || "").trim();
     if (!title) return sendJson(response, 400, { error: "Название списка обязательно" });
     const { rows } = await pool.query(
       `
         update word_lists
-        set title = $1, icon = $2, updated_at = now()
-        where id = $3 and user_id = $4
+        set title = $1, icon = $2, is_global = $3, updated_at = now()
+        where id = $4
         returning *
       `,
-      [title, String(body.icon || "📚").slice(0, 8), listId, user.sub]
+      [title, String(body.icon || "📚").slice(0, 8), user.isAdmin ? Boolean(body.isGlobal) : false, listId]
     );
     if (!rows[0]) return sendJson(response, 404, { error: "Список не найден" });
-    const data = await getWordsByList(user.sub, listId);
+    const data = await getWordsByList(listId);
     return sendJson(response, 200, mapList(rows[0], data));
   }
 
   if (request.method === "DELETE" && listMatch) {
     const listId = listMatch[1];
-    const { rowCount } = await pool.query("delete from word_lists where id = $1 and user_id = $2", [listId, user.sub]);
+    if (!(await canEditList(user, listId))) return sendJson(response, 404, { error: "Список не найден" });
+    const { rowCount } = await pool.query("delete from word_lists where id = $1", [listId]);
     return sendJson(response, rowCount ? 200 : 404, rowCount ? { ok: true } : { error: "Список не найден" });
   }
 
   const listWordMatch = url.pathname.match(/^\/api\/lists\/([^/]+)\/words$/);
   if (request.method === "POST" && listWordMatch) {
     const listId = listWordMatch[1];
-    if (!(await ownsList(user.sub, listId))) return sendJson(response, 404, { error: "Список не найден" });
+    if (!(await canEditList(user, listId))) return sendJson(response, 404, { error: "Список не найден" });
     const body = await readJson(request);
     const ru = String(body.ru || "").trim();
     const es = String(body.es || "").trim();
     if (!ru || !es) return sendJson(response, 400, { error: "Нужны русский и испанский тексты" });
     const { rows } = await pool.query(
-      "insert into words (id, list_id, ru, es, es_pronunciation) values ($1, $2, $3, $4, $5) returning *",
-      [randomUUID(), listId, ru, es, String(body.esPronunciation || "")]
+      "insert into words (id, list_id, ru, es, es_pronunciation, es_audio_url) values ($1, $2, $3, $4, $5, $6) returning *",
+      [randomUUID(), listId, ru, es, String(body.esPronunciation || ""), String(body.esAudioUrl || "")]
     );
     await pool.query("update word_lists set updated_at = now() where id = $1", [listId]);
     return sendJson(response, 201, mapWord(rows[0]));
@@ -275,7 +413,7 @@ async function handleApi(request, response, url) {
   const wordMatch = url.pathname.match(/^\/api\/words\/([^/]+)$/);
   if (request.method === "PATCH" && wordMatch) {
     const wordId = wordMatch[1];
-    if (!(await ownsWord(user.sub, wordId))) return sendJson(response, 404, { error: "Слово не найдено" });
+    if (!(await canEditWord(user, wordId))) return sendJson(response, 404, { error: "Слово не найдено" });
     const body = await readJson(request);
     const ru = String(body.ru || "").trim();
     const es = String(body.es || "").trim();
@@ -283,11 +421,11 @@ async function handleApi(request, response, url) {
     const { rows } = await pool.query(
       `
         update words
-        set ru = $1, es = $2, es_pronunciation = $3, updated_at = now()
-        where id = $4
+        set ru = $1, es = $2, es_pronunciation = $3, es_audio_url = coalesce(nullif($4, ''), words.es_audio_url), updated_at = now()
+        where id = $5
         returning *
       `,
-      [ru, es, String(body.esPronunciation || ""), wordId]
+      [ru, es, String(body.esPronunciation || ""), String(body.esAudioUrl || ""), wordId]
     );
     await pool.query("update word_lists set updated_at = now() where id = $1", [rows[0].list_id]);
     return sendJson(response, 200, mapWord(rows[0]));
@@ -295,17 +433,15 @@ async function handleApi(request, response, url) {
 
   if (request.method === "DELETE" && wordMatch) {
     const wordId = wordMatch[1];
-    const { rowCount } = await pool.query(
-      "delete from words where id = $1 and list_id in (select id from word_lists where user_id = $2)",
-      [wordId, user.sub]
-    );
+    if (!(await canEditWord(user, wordId))) return sendJson(response, 404, { error: "Слово не найдено" });
+    const { rowCount } = await pool.query("delete from words where id = $1", [wordId]);
     return sendJson(response, rowCount ? 200 : 404, rowCount ? { ok: true } : { error: "Слово не найдено" });
   }
 
   const disabledWordMatch = url.pathname.match(/^\/api\/words\/([^/]+)\/disabled$/);
   if (request.method === "POST" && disabledWordMatch) {
     const wordId = disabledWordMatch[1];
-    if (!(await ownsWord(user.sub, wordId))) return sendJson(response, 404, { error: "Слово не найдено" });
+    if (!(await canAccessWord(user, wordId))) return sendJson(response, 404, { error: "Слово не найдено" });
     const body = await readJson(request);
     const disabled = Boolean(body.disabled);
     if (disabled) {
@@ -332,22 +468,27 @@ async function handleApi(request, response, url) {
   sendJson(response, 404, { error: "Не найдено" });
 }
 
-async function seedUser(userId, client = pool) {
-  for (const list of seedLists) {
-    const listId = randomUUID();
-    await client.query("insert into word_lists (id, user_id, title, icon, color) values ($1, $2, $3, $4, $5)", [listId, userId, list.title, list.icon, list.color]);
-    for (const word of list.words) {
-      await client.query(
-        "insert into words (id, list_id, ru, es, es_pronunciation) values ($1, $2, $3, $4, $5)",
-        [randomUUID(), listId, word[0], word[1], word[2]]
-      );
-    }
-  }
-}
-
 async function getUserData(userId) {
-  const listsResult = await pool.query("select * from word_lists where user_id = $1 order by updated_at desc", [userId]);
-  const wordsResult = await pool.query("select w.* from words w join word_lists l on l.id = w.list_id where l.user_id = $1 order by w.updated_at desc", [userId]);
+  const listsResult = await pool.query(
+    `
+      select l.*, u.email as owner_email
+      from word_lists l
+      join users u on u.id = l.user_id
+      where l.user_id = $1 or l.is_global = true
+      order by l.updated_at desc
+    `,
+    [userId]
+  );
+  const wordsResult = await pool.query(
+    `
+      select w.*
+      from words w
+      join word_lists l on l.id = w.list_id
+      where l.user_id = $1 or l.is_global = true
+      order by w.updated_at desc
+    `,
+    [userId]
+  );
   const progressResult = await pool.query("select * from progress where user_id = $1", [userId]);
   const disabledResult = await pool.query("select word_id from disabled_words where user_id = $1", [userId]);
   const wordsByList = new Map();
@@ -380,16 +521,34 @@ async function getUserData(userId) {
   };
 }
 
-async function getWordsByList(userId, listId) {
+async function getAdminLists() {
+  const listsResult = await pool.query(
+    `
+      select l.*, u.email as owner_email
+      from word_lists l
+      join users u on u.id = l.user_id
+      order by l.updated_at desc
+    `
+  );
+  const wordsResult = await pool.query("select * from words order by updated_at desc");
+  const wordsByList = new Map();
+  for (const word of wordsResult.rows) {
+    const items = wordsByList.get(word.list_id) ?? [];
+    items.push(mapWord(word));
+    wordsByList.set(word.list_id, items);
+  }
+  return listsResult.rows.map((list) => mapList(list, wordsByList.get(list.id) ?? []));
+}
+
+async function getWordsByList(listId) {
   const { rows } = await pool.query(
     `
       select w.*
       from words w
-      join word_lists l on l.id = w.list_id
-      where l.user_id = $1 and l.id = $2
+      where w.list_id = $1
       order by w.updated_at desc
     `,
-    [userId, listId]
+    [listId]
   );
   return rows.map(mapWord);
 }
@@ -405,6 +564,34 @@ async function ownsWord(userId, wordId) {
     [wordId, userId]
   );
   return rowCount > 0;
+}
+
+async function canEditList(user, listId) {
+  if (user.isAdmin) return true;
+  return ownsList(user.sub, listId);
+}
+
+async function canEditWord(user, wordId) {
+  if (user.isAdmin) return true;
+  return ownsWord(user.sub, wordId);
+}
+
+async function canAccessWord(user, wordId) {
+  const { rowCount } = await pool.query(
+    `
+      select 1
+      from words w
+      join word_lists l on l.id = w.list_id
+      where w.id = $1 and ($2::boolean or l.user_id = $3 or l.is_global = true)
+    `,
+    [wordId, user.isAdmin, user.sub]
+  );
+  return rowCount > 0;
+}
+
+async function hasAnotherAdmin(excludedUserId) {
+  const { rows } = await pool.query("select count(*)::int as count from users where is_admin = true and id <> $1", [excludedUserId]);
+  return Number(rows[0]?.count ?? 0) > 0;
 }
 
 async function disableMasteredWord(userId, wordId) {
@@ -424,7 +611,18 @@ async function disableMasteredWord(userId, wordId) {
 }
 
 function mapList(row, words) {
-  return { id: row.id, title: row.title, icon: row.icon, color: row.color, updatedAt: row.updated_at, words };
+  return {
+    id: row.id,
+    title: row.title,
+    icon: row.icon,
+    color: row.color,
+    isGlobal: Boolean(row.is_global),
+    source: row.source || "",
+    userId: row.user_id,
+    ownerEmail: row.owner_email,
+    updatedAt: row.updated_at,
+    words,
+  };
 }
 
 function mapWord(row) {
@@ -434,6 +632,7 @@ function mapWord(row) {
     ru: row.ru,
     es: row.es,
     esPronunciation: row.es_pronunciation,
+    esAudioUrl: row.es_audio_url || "",
     updatedAt: row.updated_at,
   };
 }
@@ -477,7 +676,37 @@ async function requireUser(request, response) {
     sendJson(response, 401, { error: "Нужно войти" });
     return null;
   }
-  return payload;
+  const { rows } = await pool.query("select id, email, is_admin, created_at from users where id = $1", [payload.sub]);
+  const user = rows[0];
+  if (!user) {
+    sendJson(response, 401, { error: "Пользователь не найден" });
+    return null;
+  }
+  return { ...payload, email: user.email, isAdmin: Boolean(user.is_admin), createdAt: user.created_at };
+}
+
+function requireAdmin(user, response) {
+  if (user.isAdmin) return true;
+  sendJson(response, 403, { error: "Недостаточно прав" });
+  return false;
+}
+
+function mapUser(row) {
+  return {
+    id: row.id,
+    email: row.email,
+    isAdmin: Boolean(row.is_admin ?? row.isAdmin),
+    createdAt: row.created_at ?? row.createdAt,
+  };
+}
+
+function createAuthPayload(row) {
+  const user = mapUser(row);
+  return {
+    token: signToken({ sub: user.id, email: user.email }),
+    email: user.email,
+    user,
+  };
 }
 
 function b64url(value) {
