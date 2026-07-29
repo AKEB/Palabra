@@ -882,12 +882,21 @@ function Learn({ lists, language, selectedLists, setSelectedLists, learnedWordId
     setFlipped(false);
   }
 
+  function nextUnlearnedId(learnedSet: Set<string>, fallbackId: string) {
+    if (!session.length) return fallbackId;
+    for (let offset = 1; offset <= session.length; offset += 1) {
+      const candidate = session[(currentIndex + offset) % session.length];
+      if (!learnedSet.has(candidate)) return candidate;
+    }
+    return fallbackId;
+  }
+
   async function onRemembered() {
     if (!current) return;
     const id = current.id;
-    const nextId = session.length
-      ? session[currentIndex >= session.length - 1 ? 0 : currentIndex + 1]
-      : id;
+    const learnedSet = new Set(learnedWords);
+    learnedSet.add(id);
+    const nextId = nextUnlearnedId(learnedSet, id);
     await markWordLearned(id, true);
     setCurrentId(nextId);
     setFlipped(false);
