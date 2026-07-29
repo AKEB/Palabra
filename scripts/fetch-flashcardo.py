@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fetch Russian→Spanish topic flashcards from Flashcardo and write seed JSON."""
+"""Fetch Russian→target topic flashcards from Flashcardo and write seed JSON."""
 
 from __future__ import annotations
 
@@ -33,6 +33,33 @@ TOPICS = [
     ("ustroystva", "Устройства", "📱", "#475569"),
 ]
 
+LANGUAGES = [
+    {
+        "code": "es",
+        "slug": "ispanskiye-kartochki",
+        "label": "Испанский",
+        "source": "https://flashcardo.com/ru/ispanskiye-kartochki/",
+    },
+    {
+        "code": "en",
+        "slug": "angliyskiye-kartochki",
+        "label": "Английский",
+        "source": "https://flashcardo.com/ru/angliyskiye-kartochki/",
+    },
+    {
+        "code": "am",
+        "slug": "armyanskiye-kartochki",
+        "label": "Армянский",
+        "source": "https://flashcardo.com/ru/armyanskiye-kartochki/",
+    },
+    {
+        "code": "ge",
+        "slug": "gruzinskiye-kartochki",
+        "label": "Грузинский",
+        "source": "https://flashcardo.com/ru/gruzinskiye-kartochki/",
+    },
+]
+
 
 def fetch(url: str) -> str:
     req = urllib.request.Request(
@@ -50,6 +77,12 @@ def extract_cards(html: str) -> list[dict]:
     if not match:
         return []
     return json.loads(match.group(1))
+
+
+def target_phrase(card: dict) -> str:
+    parts = [card.get("prew") or "", card.get("word") or ""]
+    # For AM/GE flashcardo puts Latin transliteration in postw — keep it out of the target word.
+    return " ".join(part.strip() for part in parts if part and part.strip()).strip()
 
 
 def spanish_to_cyrillic(text: str) -> str:
@@ -72,7 +105,6 @@ def spanish_to_cyrillic(text: str) -> str:
         .replace(":", "")
     )
 
-    # Keep common function words as set phrases used in the app samples.
     replacements = {
         "el": "эль",
         "la": "ла",
@@ -98,11 +130,11 @@ def spanish_to_cyrillic(text: str) -> str:
         if raw_word in replacements:
             words.append(replacements[raw_word])
             continue
-        words.append(transliterate_word(raw_word))
+        words.append(transliterate_spanish_word(raw_word))
     return " ".join(words)
 
 
-def transliterate_word(value: str) -> str:
+def transliterate_spanish_word(value: str) -> str:
     out: list[str] = []
     i = 0
     while i < len(value):
@@ -197,31 +229,152 @@ def transliterate_word(value: str) -> str:
     return "".join(out)
 
 
-def spanish_phrase(card: dict) -> str:
-    parts = [card.get("prew") or "", card.get("word") or "", card.get("postw") or ""]
-    return " ".join(part.strip() for part in parts if part and part.strip()).strip()
+def english_to_cyrillic(text: str) -> str:
+    """Very approximate English pronunciation in Cyrillic for Russian learners."""
+    value = text.strip().lower()
+    value = re.sub(r"[.!?,:;\"()]", "", value)
+    replacements = {
+        "i": "ай",
+        "you": "ю",
+        "he": "хи",
+        "she": "ши",
+        "we": "ви",
+        "they": "зей",
+        "the": "зе",
+        "a": "э",
+        "an": "эн",
+        "and": "энд",
+        "of": "ов",
+        "to": "ту",
+        "in": "ин",
+        "on": "он",
+        "for": "фор",
+        "with": "виз",
+        "is": "из",
+        "are": "ар",
+        "was": "воз",
+        "were": "вёр",
+        "this": "зис",
+        "that": "зэт",
+        "what": "вот",
+        "where": "вэа",
+        "when": "вэн",
+        "who": "ху",
+        "why": "вай",
+        "how": "хау",
+        "yes": "йес",
+        "no": "ноу",
+        "hello": "хелоу",
+        "goodbye": "гудбай",
+        "please": "плиз",
+        "thank": "сэнк",
+        "thanks": "сэнкс",
+        "sorry": "сори",
+    }
+    words = []
+    for raw in value.split():
+        if raw in replacements:
+            words.append(replacements[raw])
+        else:
+            words.append(transliterate_english_word(raw))
+    return " ".join(words)
 
 
-def main() -> None:
+def transliterate_english_word(value: str) -> str:
+    out: list[str] = []
+    i = 0
+    digraphs = {
+        "sh": "ш",
+        "ch": "ч",
+        "th": "с",
+        "ph": "ф",
+        "wh": "у",
+        "ck": "к",
+        "qu": "кв",
+        "ee": "и",
+        "oo": "у",
+        "ea": "и",
+        "ou": "ау",
+        "ow": "ау",
+        "ai": "ей",
+        "ay": "ей",
+        "oy": "ой",
+        "oi": "ой",
+        "ng": "нг",
+    }
+    while i < len(value):
+        pair = value[i : i + 2]
+        if pair in digraphs:
+            out.append(digraphs[pair])
+            i += 2
+            continue
+        ch = value[i]
+        mapping = {
+            "a": "а",
+            "b": "б",
+            "c": "к",
+            "d": "д",
+            "e": "е",
+            "f": "ф",
+            "g": "г",
+            "h": "х",
+            "i": "и",
+            "j": "дж",
+            "k": "к",
+            "l": "л",
+            "m": "м",
+            "n": "н",
+            "o": "о",
+            "p": "п",
+            "q": "к",
+            "r": "р",
+            "s": "с",
+            "t": "т",
+            "u": "у",
+            "v": "в",
+            "w": "в",
+            "x": "кс",
+            "y": "й",
+            "z": "з",
+            "'": "",
+            "-": "-",
+        }
+        out.append(mapping.get(ch, ch))
+        i += 1
+    return "".join(out)
+
+
+def pronunciation_for(lang: str, card: dict, target: str) -> str:
+    postw = (card.get("postw") or "").strip()
+    if lang in {"am", "ge"} and postw:
+        return postw
+    if lang == "es":
+        return spanish_to_cyrillic(target)
+    if lang == "en":
+        return english_to_cyrillic(target)
+    return postw or ""
+
+
+def fetch_language(lang: dict) -> list[dict]:
     lists = []
     for slug, title, icon, color in TOPICS:
-        url = f"https://flashcardo.com/ru/ispanskiye-kartochki/{slug}/1"
-        print(f"fetch {title} ({slug})...")
+        url = f"https://flashcardo.com/ru/{lang['slug']}/{slug}/1"
+        print(f"[{lang['code']}] fetch {title} ({slug})...")
         html = fetch(url)
         cards = extract_cards(html)
         words = []
         for card in cards:
-            es = spanish_phrase(card)
+            target = target_phrase(card)
             ru = (card.get("from") or "").strip()
-            if not es or not ru:
+            if not target or not ru:
                 continue
             audio = card.get("audio") or ""
             sid_audio = card.get("sid_audio")
             words.append(
                 {
                     "ru": ru,
-                    "es": es,
-                    "esPronunciation": spanish_to_cyrillic(es),
+                    "es": target,
+                    "esPronunciation": pronunciation_for(lang["code"], card, target),
                     "esAudioUrl": f"https://flashcardo.com/audio/{sid_audio}/{audio}.mp3" if audio and sid_audio else "",
                     "hint": (card.get("fromhint") or "").strip(),
                     "sourceId": card.get("id"),
@@ -233,23 +386,39 @@ def main() -> None:
                 "title": title,
                 "icon": icon,
                 "color": color,
+                "language": lang["code"],
                 "isGlobal": True,
-                "source": "flashcardo",
+                "source": f"flashcardo:{lang['code']}",
                 "words": words,
             }
         )
         print(f"  -> {len(words)} words")
-        time.sleep(0.35)
+        time.sleep(0.3)
+    return lists
+
+
+def main() -> None:
+    all_lists: list[dict] = []
+    sources = []
+    for lang in LANGUAGES:
+        lang_lists = fetch_language(lang)
+        all_lists.extend(lang_lists)
+        sources.append(lang["source"])
 
     payload = {
-        "source": "https://flashcardo.com/ru/ispanskiye-kartochki/",
+        "sources": sources,
         "importedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "lists": lists,
+        "lists": all_lists,
     }
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    total = sum(len(item["words"]) for item in lists)
-    print(f"Wrote {OUT} ({len(lists)} lists, {total} words)")
+    total = sum(len(item["words"]) for item in all_lists)
+    by_lang = {}
+    for item in all_lists:
+        by_lang[item["language"]] = by_lang.get(item["language"], 0) + len(item["words"])
+    print(f"Wrote {OUT} ({len(all_lists)} lists, {total} words)")
+    for code, count in by_lang.items():
+        print(f"  {code}: {count} words")
 
 
 if __name__ == "__main__":

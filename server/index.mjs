@@ -10,6 +10,7 @@ const JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-me";
 const DATABASE_URL = process.env.DATABASE_URL || "postgres://palabra:palabra@localhost:5432/palabra";
 const publicDir = join(process.cwd(), "dist");
 const flashcardoSeedPath = join(process.cwd(), "data", "flashcardo-topics.json");
+const SUPPORTED_LANGUAGES = new Set(["es", "en", "am", "ge"]);
 
 const pool = new Pool({ connectionString: DATABASE_URL });
 
@@ -97,6 +98,7 @@ async function initDb() {
   await pool.query("alter table users add column if not exists is_admin boolean not null default false");
   await pool.query("alter table word_lists add column if not exists is_global boolean not null default false");
   await pool.query("alter table word_lists add column if not exists source text not null default ''");
+  await pool.query("alter table word_lists add column if not exists language text not null default 'es'");
   await pool.query("alter table words add column if not exists es_audio_url text not null default ''");
   await pool.query(`
     update users
@@ -115,6 +117,13 @@ async function initDb() {
   await pool.query("alter table progress add column if not exists mastery_oral_correct integer not null default 0");
   await pool.query("alter table progress add column if not exists mastery_oral_wrong integer not null default 0");
   await pool.query("alter table words drop column if exists ru_pronunciation");
+  await pool.query("update word_lists set language = 'es' where language is null or language = ''");
+  await pool.query("update word_lists set source = 'flashcardo:es', language = 'es' where source = 'flashcardo'");
+}
+
+function normalizeLanguage(value, fallback = "es") {
+  const code = String(value || "").trim().toLowerCase();
+  return SUPPORTED_LANGUAGES.has(code) ? code : fallback;
 }
 
 async function seedFlashcardoGlobalLists() {
@@ -128,22 +137,40 @@ async function seedFlashcardoGlobalLists() {
     console.log("No admin user yet, skip Flashcardo global lists import");
     return;
   }
-  const existing = await pool.query("select 1 from word_lists where source = 'flashcardo' limit 1");
-  if (existing.rowCount > 0) {
-    console.log("Flashcardo global lists already imported");
-    return;
-  }
 
   const payload = JSON.parse(readFileSync(flashcardoSeedPath, "utf8"));
   const lists = Array.isArray(payload.lists) ? payload.lists : [];
+  if (!lists.length) {
+    console.log("Flashcardo seed file is empty, skip import");
+    return;
+  }
+
+  const existingSources = await pool.query(
+    "select distinct source from word_lists where source like 'flashcardo:%' or source = 'flashcardo'"
+  );
+  const present = new Set(existingSources.rows.map((row) => row.source === "flashcardo" ? "flashcardo:es" : row.source));
+
+  const pending = lists.filter((list) => {
+    const language = normalizeLanguage(list.language || (String(list.source || "").split(":")[1]), "es");
+    const source = String(list.source || `flashcardo:${language}`);
+    return !present.has(source);
+  });
+
+  if (!pending.length) {
+    console.log("Flashcardo global lists already imported for all languages");
+    return;
+  }
+
   const client = await pool.connect();
   try {
     await client.query("begin");
-    for (const list of lists) {
+    for (const list of pending) {
+      const language = normalizeLanguage(list.language || (String(list.source || "").split(":")[1]), "es");
+      const source = String(list.source || `flashcardo:${language}`);
       const listId = randomUUID();
       await client.query(
-        "insert into word_lists (id, user_id, title, icon, color, is_global, source) values ($1, $2, $3, $4, $5, true, 'flashcardo')",
-        [listId, adminId, String(list.title || "").trim(), String(list.icon || "📚").slice(0, 8), String(list.color || "#087d86")]
+        "insert into word_lists (id, user_id, title, icon, color, is_global, source, language) values ($1, $2, $3, $4, $5, true, $6, $7)",
+        [listId, adminId, String(list.title || "").trim(), String(list.icon || "📚").slice(0, 8), String(list.color || "#087d86"), source, language]
       );
       for (const word of list.words || []) {
         const ru = String(word.ru || "").trim();
@@ -161,9 +188,10 @@ async function seedFlashcardoGlobalLists() {
           ]
         );
       }
+      present.add(source);
     }
     await client.query("commit");
-    console.log(`Imported ${lists.length} Flashcardo global lists`);
+    console.log(`Imported ${pending.length} Flashcardo global lists`);
   } catch (error) {
     await client.query("rollback").catch(() => undefined);
     console.error("Flashcardo import failed", error);
@@ -366,9 +394,10 @@ async function handleApi(request, response, url) {
     const body = await readJson(request);
     const title = String(body.title || "").trim();
     if (!title) return sendJson(response, 400, { error: "Название списка обязательно" });
+    const language = normalizeLanguage(body.language, "es");
     const { rows } = await pool.query(
-      "insert into word_lists (id, user_id, title, icon, color, is_global) values ($1, $2, $3, $4, $5, $6) returning *",
-      [randomUUID(), user.sub, title, String(body.icon || "📚").slice(0, 8), String(body.color || "#087d86"), user.isAdmin && Boolean(body.isGlobal)]
+      "insert into word_lists (id, user_id, title, icon, color, is_global, language) values ($1, $2, $3, $4, $5, $6, $7) returning *",
+      [randomUUID(), user.sub, title, String(body.icon || "📚").slice(0, 8), String(body.color || "#087d86"), user.isAdmin && Boolean(body.isGlobal), language]
     );
     return sendJson(response, 201, mapList(rows[0], []));
   }
@@ -380,14 +409,15 @@ async function handleApi(request, response, url) {
     const body = await readJson(request);
     const title = String(body.title || "").trim();
     if (!title) return sendJson(response, 400, { error: "Название списка обязательно" });
+    const language = normalizeLanguage(body.language, "es");
     const { rows } = await pool.query(
       `
         update word_lists
-        set title = $1, icon = $2, is_global = $3, updated_at = now()
-        where id = $4
+        set title = $1, icon = $2, is_global = $3, language = $4, updated_at = now()
+        where id = $5
         returning *
       `,
-      [title, String(body.icon || "📚").slice(0, 8), user.isAdmin ? Boolean(body.isGlobal) : false, listId]
+      [title, String(body.icon || "📚").slice(0, 8), user.isAdmin ? Boolean(body.isGlobal) : false, language, listId]
     );
     if (!rows[0]) return sendJson(response, 404, { error: "Список не найден" });
     const data = await getWordsByList(listId);
@@ -408,7 +438,7 @@ async function handleApi(request, response, url) {
     const body = await readJson(request);
     const ru = String(body.ru || "").trim();
     const es = String(body.es || "").trim();
-    if (!ru || !es) return sendJson(response, 400, { error: "Нужны русский и испанский тексты" });
+    if (!ru || !es) return sendJson(response, 400, { error: "Нужны русский текст и перевод" });
     const { rows } = await pool.query(
       "insert into words (id, list_id, ru, es, es_pronunciation, es_audio_url) values ($1, $2, $3, $4, $5, $6) returning *",
       [randomUUID(), listId, ru, es, String(body.esPronunciation || ""), String(body.esAudioUrl || "")]
@@ -424,7 +454,7 @@ async function handleApi(request, response, url) {
     const body = await readJson(request);
     const ru = String(body.ru || "").trim();
     const es = String(body.es || "").trim();
-    if (!ru || !es) return sendJson(response, 400, { error: "Нужны русский и испанский тексты" });
+    if (!ru || !es) return sendJson(response, 400, { error: "Нужны русский текст и перевод" });
     const { rows } = await pool.query(
       `
         update words
@@ -639,6 +669,7 @@ function mapList(row, words) {
     title: row.title,
     icon: row.icon,
     color: row.color,
+    language: normalizeLanguage(row.language, "es"),
     isGlobal: Boolean(row.is_global),
     source: row.source || "",
     userId: row.user_id,

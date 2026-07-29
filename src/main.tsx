@@ -12,11 +12,14 @@ type Word = {
   updatedAt?: string;
 };
 
+type LanguageCode = "es" | "en" | "am" | "ge";
+
 type WordList = {
   id: string;
   title: string;
   icon: string;
   color: string;
+  language?: LanguageCode;
   isGlobal?: boolean;
   userId?: string;
   ownerEmail?: string;
@@ -62,18 +65,87 @@ type AuthUser = {
 
 type ManagedUser = AuthUser;
 
+type LanguageInfo = {
+  code: LanguageCode;
+  pair: string;
+  short: string;
+  name: string;
+  adjective: string;
+  htmlLang: string;
+  keys: string[];
+};
+
 const STORE = "palabra-store";
 const DB_NAME = "palabra-db";
 const DB_VERSION = 1;
 const STUDY_SESSION_SIZE = 30;
 const RETRY_AFTER_WORDS = 5;
+const LANGUAGE_STORAGE_KEY = "palabra-language";
 
-const MODES: Array<{ id: Mode; title: string; description: string }> = [
-  { id: "flash-ru-es", title: "Карточки RU -> ES", description: "Увидеть русское, вспомнить испанское" },
-  { id: "flash-es-ru", title: "Карточки ES -> RU", description: "Увидеть испанское, вспомнить русский" },
-  { id: "type-ru-es", title: "Письмо RU -> ES", description: "Напечатать испанский перевод" },
-  { id: "type-es-ru", title: "Письмо ES -> RU", description: "Напечатать русский перевод" },
+const LANGUAGES: LanguageInfo[] = [
+  {
+    code: "es",
+    pair: "RU → ES",
+    short: "ES",
+    name: "Испанский",
+    adjective: "испанском",
+    htmlLang: "es",
+    keys: ["á", "é", "í", "ó", "ú", "ñ", "ü", "¿", "¡"],
+  },
+  {
+    code: "en",
+    pair: "RU → EN",
+    short: "EN",
+    name: "Английский",
+    adjective: "английском",
+    htmlLang: "en",
+    keys: ["'", "’", "-"],
+  },
+  {
+    code: "am",
+    pair: "RU → AM",
+    short: "AM",
+    name: "Армянский",
+    adjective: "армянском",
+    htmlLang: "hy",
+    keys: [
+      "ա", "բ", "գ", "դ", "ե", "զ", "է", "ը", "թ", "ժ", "ի", "լ", "խ",
+      "ծ", "կ", "հ", "ձ", "ղ", "ճ", "մ", "յ", "ն", "շ", "ո", "չ", "պ",
+      "ջ", "ռ", "ս", "վ", "տ", "ր", "ց", "ու", "փ", "ք", "օ", "ֆ", "և",
+    ],
+  },
+  {
+    code: "ge",
+    pair: "RU → GE",
+    short: "GE",
+    name: "Грузинский",
+    adjective: "грузинском",
+    htmlLang: "ka",
+    keys: [
+      "ა", "ბ", "გ", "დ", "ე", "ვ", "ზ", "თ", "ი", "კ", "ლ", "მ", "ნ",
+      "ო", "პ", "ჟ", "რ", "ს", "ტ", "უ", "ფ", "ქ", "ღ", "ყ", "შ", "ჩ",
+      "ც", "ძ", "წ", "ჭ", "ხ", "ჯ", "ჰ",
+    ],
+  },
 ];
+
+function getLanguage(code?: string | null): LanguageInfo {
+  return LANGUAGES.find((item) => item.code === code) ?? LANGUAGES[0];
+}
+
+function listLanguage(list: WordList): LanguageCode {
+  return getLanguage(list.language).code;
+}
+
+function modesFor(language: LanguageInfo): Array<{ id: Mode; title: string; description: string }> {
+  const code = language.short;
+  return [
+    { id: "flash-ru-es", title: `Карточки RU → ${code}`, description: `Увидеть русское, вспомнить ${language.name.toLowerCase()}` },
+    { id: "flash-es-ru", title: `Карточки ${code} → RU`, description: `Увидеть ${language.name.toLowerCase()}, вспомнить русский` },
+    { id: "type-ru-es", title: `Письмо RU → ${code}`, description: `Напечатать перевод на ${language.adjective}` },
+    { id: "type-es-ru", title: `Письмо ${code} → RU`, description: "Напечатать русский перевод" },
+  ];
+}
 
 function now() {
   return new Date().toISOString();
@@ -363,9 +435,34 @@ function App() {
   const [testSelectedLists, setTestSelectedLists] = useState<string[]>([]);
   const [mode, setMode] = useState<Mode>("flash-ru-es");
   const [view, setView] = useState<View>("learn");
+  const [languageCode, setLanguageCode] = useState<LanguageCode>(() => getLanguage(localStorage.getItem(LANGUAGE_STORAGE_KEY)).code);
   const [online, setOnline] = useState(navigator.onLine);
   const [syncing, setSyncing] = useState(false);
   const [notice, setNotice] = useState("");
+  const language = getLanguage(languageCode);
+  const languageLists = useMemo(
+    () => lists.filter((list) => listLanguage(list) === languageCode),
+    [lists, languageCode]
+  );
+
+  function changeLanguage(code: LanguageCode) {
+    setLanguageCode(code);
+    localStorage.setItem(LANGUAGE_STORAGE_KEY, code);
+    setLearnSelectedLists((current) => {
+      const nextLists = lists.filter((list) => listLanguage(list) === code);
+      const valid = current.filter((id) => nextLists.some((list) => list.id === id));
+      const next = valid.length ? valid : nextLists.slice(0, 1).map((list) => list.id);
+      dbSet(userCacheKey(email, "learnSelectedLists"), next).catch(() => undefined);
+      return next;
+    });
+    setTestSelectedLists((current) => {
+      const nextLists = lists.filter((list) => listLanguage(list) === code);
+      const valid = current.filter((id) => nextLists.some((list) => list.id === id));
+      const next = valid.length ? valid : nextLists.slice(0, 1).map((list) => list.id);
+      dbSet(userCacheKey(email, "testSelectedLists"), next).catch(() => undefined);
+      return next;
+    });
+  }
 
   useEffect(() => {
     if (!token) return;
@@ -379,9 +476,11 @@ function App() {
       const cachedLearnSelectedLists = await dbGet<string[]>(userCacheKey(email, "learnSelectedLists"), legacySelectedLists);
       const cachedTestSelectedLists = await dbGet<string[]>(userCacheKey(email, "testSelectedLists"), legacySelectedLists);
       setLists(cachedLists);
+      const currentLanguage = getLanguage(localStorage.getItem(LANGUAGE_STORAGE_KEY)).code;
+      const languageCached = cachedLists.filter((list) => listLanguage(list) === currentLanguage);
       const pickSelected = (cached: string[]) => {
-        const valid = cached.filter((id) => cachedLists.some((list) => list.id === id));
-        return valid.length ? valid : cachedLists.slice(0, 1).map((item) => item.id);
+        const valid = cached.filter((id) => languageCached.some((list) => list.id === id));
+        return valid.length ? valid : languageCached.slice(0, 1).map((item) => item.id);
       };
       setLearnSelectedLists(pickSelected(cachedLearnSelectedLists));
       setTestSelectedLists(pickSelected(cachedTestSelectedLists));
@@ -462,19 +561,25 @@ function App() {
       setEmail(data.email);
       setCurrentUser(data.user);
       localStorage.setItem("palabra-email", data.email);
+      const currentLanguage = getLanguage(localStorage.getItem(LANGUAGE_STORAGE_KEY)).code;
+      const languageDataLists = data.lists.filter((list) => listLanguage(list) === currentLanguage);
       setLearnSelectedLists((current) => {
-        const validSelected = current.filter((id) => data.lists.some((list) => list.id === id));
-        const selectedTitles = previousLists.filter((list) => current.includes(list.id)).map((list) => list.title);
-        const titleMatched = data.lists.filter((list) => selectedTitles.includes(list.title)).map((list) => list.id);
-        const nextSelected = validSelected.length ? validSelected : titleMatched.length ? titleMatched : data.lists.slice(0, 1).map((list) => list.id);
+        const validSelected = current.filter((id) => languageDataLists.some((list) => list.id === id));
+        const selectedTitles = previousLists
+          .filter((list) => current.includes(list.id) && listLanguage(list) === currentLanguage)
+          .map((list) => list.title);
+        const titleMatched = languageDataLists.filter((list) => selectedTitles.includes(list.title)).map((list) => list.id);
+        const nextSelected = validSelected.length ? validSelected : titleMatched.length ? titleMatched : languageDataLists.slice(0, 1).map((list) => list.id);
         dbSet(userCacheKey(data.email, "learnSelectedLists"), nextSelected).catch(() => undefined);
         return nextSelected;
       });
       setTestSelectedLists((current) => {
-        const validSelected = current.filter((id) => data.lists.some((list) => list.id === id));
-        const selectedTitles = previousLists.filter((list) => current.includes(list.id)).map((list) => list.title);
-        const titleMatched = data.lists.filter((list) => selectedTitles.includes(list.title)).map((list) => list.id);
-        const nextSelected = validSelected.length ? validSelected : titleMatched.length ? titleMatched : data.lists.slice(0, 1).map((list) => list.id);
+        const validSelected = current.filter((id) => languageDataLists.some((list) => list.id === id));
+        const selectedTitles = previousLists
+          .filter((list) => current.includes(list.id) && listLanguage(list) === currentLanguage)
+          .map((list) => list.title);
+        const titleMatched = languageDataLists.filter((list) => selectedTitles.includes(list.title)).map((list) => list.id);
+        const nextSelected = validSelected.length ? validSelected : titleMatched.length ? titleMatched : languageDataLists.slice(0, 1).map((list) => list.id);
         dbSet(userCacheKey(data.email, "testSelectedLists"), nextSelected).catch(() => undefined);
         return nextSelected;
       });
@@ -545,12 +650,32 @@ function App() {
 
   return (
     <div className="shell">
-      <Sidebar view={view} setView={setView} email={email} currentUser={currentUser} signOut={signOut} online={online} syncing={syncing} />
+      <Sidebar
+        view={view}
+        setView={setView}
+        email={email}
+        currentUser={currentUser}
+        signOut={signOut}
+        online={online}
+        syncing={syncing}
+        language={language}
+        setLanguage={changeLanguage}
+      />
       <main className="workspace">
-        <Topbar view={view} online={online} syncing={syncing} sync={sync} notice={notice} signOut={signOut} />
+        <Topbar
+          view={view}
+          online={online}
+          syncing={syncing}
+          sync={sync}
+          notice={notice}
+          signOut={signOut}
+          language={language}
+          setLanguage={changeLanguage}
+        />
         {view === "learn" && (
           <Learn
-            lists={lists}
+            lists={languageLists}
+            language={language}
             selectedLists={learnSelectedLists}
             setSelectedLists={setLearnSelectedLists}
             learnedWordIds={learnedWordIds}
@@ -559,7 +684,8 @@ function App() {
         )}
         {view === "test" && (
           <Test
-            lists={lists}
+            lists={languageLists}
+            language={language}
             selectedLists={testSelectedLists}
             setSelectedLists={setTestSelectedLists}
             mode={mode}
@@ -572,7 +698,8 @@ function App() {
         )}
         {view === "admin" && (
           <Admin
-            lists={lists}
+            lists={languageLists}
+            language={language}
             token={token}
             online={online}
             currentUser={currentUser}
@@ -594,7 +721,7 @@ function App() {
             setNotice={setNotice}
           />
         )}
-        {view === "stats" && <Stats lists={lists} progress={progress} queue={queue} learnedWordIds={learnedWordIds} />}
+        {view === "stats" && <Stats lists={languageLists} progress={progress} queue={queue} learnedWordIds={learnedWordIds} />}
       </main>
       <MobileNav view={view} setView={setView} currentUser={currentUser} />
     </div>
@@ -645,7 +772,7 @@ function AuthScreen({ setToken, setEmail, setCurrentUser, online }: {
           <AppIcon />
           <div>
             <h1>Palabra</h1>
-            <p>Испанские слова, которые остаются в памяти.</p>
+            <p>Слова на разных языках, которые остаются в памяти.</p>
           </div>
         </div>
         <div className="auth-tabs" role="tablist">
@@ -669,8 +796,9 @@ function AuthScreen({ setToken, setEmail, setCurrentUser, online }: {
   );
 }
 
-function Learn({ lists, selectedLists, setSelectedLists, learnedWordIds, markWordLearned }: {
+function Learn({ lists, language, selectedLists, setSelectedLists, learnedWordIds, markWordLearned }: {
   lists: WordList[];
+  language: LanguageInfo;
   selectedLists: string[];
   setSelectedLists: (ids: string[]) => void;
   learnedWordIds: string[];
@@ -840,7 +968,7 @@ function Learn({ lists, selectedLists, setSelectedLists, learnedWordIds, markWor
               <span className="hint">
                 {currentLearned
                   ? (flipped ? "Выученное слово — можно листать дальше" : "Выучено · нажмите для перевода")
-                  : (flipped ? "Запомните испанское слово" : "Нажмите для перевода, свайп для листания")}
+                  : (flipped ? `Запомните слово на ${language.name.toLowerCase()}` : "Нажмите для перевода, свайп для листания")}
               </span>
             </button>
             <div className="learn-nav">
@@ -870,8 +998,9 @@ function Learn({ lists, selectedLists, setSelectedLists, learnedWordIds, markWor
   );
 }
 
-function Test({ lists, selectedLists, setSelectedLists, mode, setMode, progress, disabledWordIds, learnedWordIds, mark }: {
+function Test({ lists, language, selectedLists, setSelectedLists, mode, setMode, progress, disabledWordIds, learnedWordIds, mark }: {
   lists: WordList[];
+  language: LanguageInfo;
   selectedLists: string[];
   setSelectedLists: (ids: string[]) => void;
   mode: Mode;
@@ -943,7 +1072,8 @@ function Test({ lists, selectedLists, setSelectedLists, mode, setMode, progress,
   const dailyGoal = Math.min(30, words.length || 1);
   const today = dateKey();
   const dailyDone = Math.min(dailyGoal, selectedProgress.filter((item) => item.activityDates?.includes(today)).length);
-  const currentMode = MODES.find((item) => item.id === mode)!;
+  const modes = modesFor(language);
+  const currentMode = modes.find((item) => item.id === mode)!;
   const typeMode = mode.startsWith("type");
   const practiceKind = getPracticeKind(mode);
 
@@ -1027,7 +1157,7 @@ function Test({ lists, selectedLists, setSelectedLists, mode, setMode, progress,
             </button>
             {modeMenuOpen && (
               <div className="mode-menu">
-                {MODES.map((item) => (
+                {modes.map((item) => (
                   <button
                     key={item.id}
                     type="button"
@@ -1126,7 +1256,7 @@ function Test({ lists, selectedLists, setSelectedLists, mode, setMode, progress,
         )}
         {current && typeMode && (
           <form className="typing-card" onSubmit={checkAnswer}>
-            <p>{mode === "type-ru-es" ? "Как будет на испанском?" : "Как будет по-русски?"}</p>
+            <p>{mode === "type-ru-es" ? `Как будет на ${language.adjective}?` : "Как будет по-русски?"}</p>
             <h3>{mode === "type-ru-es" ? current.ru : current.es}</h3>
             <input
               ref={answerInputRef}
@@ -1135,7 +1265,7 @@ function Test({ lists, selectedLists, setSelectedLists, mode, setMode, progress,
               autoFocus
               placeholder="Введите ответ"
               disabled={needsAcknowledge}
-              lang={mode === "type-ru-es" ? "es" : "ru"}
+              lang={mode === "type-ru-es" ? language.htmlLang : "ru"}
               autoCorrect="off"
               autoCapitalize="none"
               spellCheck={false}
@@ -1143,13 +1273,15 @@ function Test({ lists, selectedLists, setSelectedLists, mode, setMode, progress,
             {feedback && <div className={feedback.startsWith("Верно") ? "feedback ok" : "feedback bad"}>{feedback}</div>}
             {!needsAcknowledge && <button className="primary wide">Проверить</button>}
             {needsAcknowledge && <button className="primary wide" type="button" onClick={nextUnknown}>Понял</button>}
-            <div className="accent-keys" aria-label="Испанские символы">
-              {["á", "é", "í", "ó", "ú", "ñ", "ü", "¿", "¡"].map((char) => (
-                <button key={char} type="button" onClick={() => insertAccent(char)} aria-label={`Вставить ${char}`} disabled={needsAcknowledge}>
-                  {char}
-                </button>
-              ))}
-            </div>
+            {mode === "type-ru-es" && language.keys.length > 0 && (
+              <div className={`accent-keys ${language.keys.length > 12 ? "wide" : ""}`} aria-label={`Символы: ${language.name}`}>
+                {language.keys.map((char) => (
+                  <button key={char} type="button" onClick={() => insertAccent(char)} aria-label={`Вставить ${char}`} disabled={needsAcknowledge}>
+                    {char}
+                  </button>
+                ))}
+              </div>
+            )}
           </form>
         )}
         <div className="mobile-goal-card">
@@ -1344,8 +1476,9 @@ function UsersAdmin({ token, online, currentUser, sync, setNotice }: {
   );
 }
 
-function Admin({ lists, token, online, currentUser, sync, progress, disabledWordIds, learnedWordIds, persistLists, toggleWordDisabled, setNotice }: {
+function Admin({ lists, language, token, online, currentUser, sync, progress, disabledWordIds, learnedWordIds, persistLists, toggleWordDisabled, setNotice }: {
   lists: WordList[];
+  language: LanguageInfo;
   token: string;
   online: boolean;
   currentUser: AuthUser | null;
@@ -1359,27 +1492,34 @@ function Admin({ lists, token, online, currentUser, sync, progress, disabledWord
 }) {
   const isAdmin = Boolean(currentUser?.isAdmin);
   const [activeListId, setActiveListId] = useState(lists[0]?.id ?? "");
-  const [draftList, setDraftList] = useState({ title: "", icon: "📚", color: "#087d86", isGlobal: false });
-  const [listEdit, setListEdit] = useState({ title: "", icon: "📚", isGlobal: false });
+  const [draftList, setDraftList] = useState({ title: "", icon: "📚", color: "#087d86", isGlobal: false, language: language.code });
+  const [listEdit, setListEdit] = useState({ title: "", icon: "📚", isGlobal: false, language: language.code });
   const [word, setWord] = useState({ ru: "", es: "", esPronunciation: "" });
   const [editingWordId, setEditingWordId] = useState("");
   const [wordEdit, setWordEdit] = useState({ ru: "", es: "", esPronunciation: "" });
   const [confirmDeleteList, setConfirmDeleteList] = useState(false);
   const [adminLists, setAdminLists] = useState<WordList[]>([]);
   const importInputRef = useRef<HTMLInputElement | null>(null);
-  const editableLists = isAdmin ? adminLists : lists;
+  const editableLists = (isAdmin ? adminLists : lists).filter((list) => listLanguage(list) === language.code);
   const active = editableLists.find((list) => list.id === activeListId) ?? editableLists[0];
   const disabledWords = new Set(disabledWordIds);
   const learnedWords = new Set(learnedWordIds);
 
   useEffect(() => {
     if (!activeListId && editableLists[0]) setActiveListId(editableLists[0].id);
+    if (activeListId && !editableLists.some((list) => list.id === activeListId)) {
+      setActiveListId(editableLists[0]?.id ?? "");
+    }
   }, [editableLists, activeListId]);
 
   useEffect(() => {
-    if (active) setListEdit({ title: active.title, icon: active.icon, isGlobal: Boolean(active.isGlobal) });
+    setDraftList((current) => ({ ...current, language: language.code }));
+  }, [language.code]);
+
+  useEffect(() => {
+    if (active) setListEdit({ title: active.title, icon: active.icon, isGlobal: Boolean(active.isGlobal), language: listLanguage(active) });
     setConfirmDeleteList(false);
-  }, [active?.id, active?.title, active?.icon, active?.isGlobal]);
+  }, [active?.id, active?.title, active?.icon, active?.isGlobal, active?.language]);
 
   useEffect(() => {
     if (!isAdmin) {
@@ -1402,7 +1542,7 @@ function Admin({ lists, token, online, currentUser, sync, progress, disabledWord
     } else {
       await persistLists([...lists, created]);
     }
-    setDraftList({ title: "", icon: "📚", color: "#087d86", isGlobal: false });
+    setDraftList({ title: "", icon: "📚", color: "#087d86", isGlobal: false, language: language.code });
     setActiveListId(created.id);
     setNotice("Список создан");
   }
@@ -1536,7 +1676,7 @@ function Admin({ lists, token, online, currentUser, sync, progress, disabledWord
                 <span>{list.icon}</span>
                 <div className="list-row-meta">
                   <b>{list.title}</b>
-                  <small>{list.isGlobal ? "Глобальный" : list.ownerEmail ?? "Личный список"}</small>
+                  <small>{getLanguage(list.language).short} · {list.isGlobal ? "Глобальный" : list.ownerEmail ?? "Личный список"}</small>
                 </div>
                 <small>{list.words.filter((item) => !disabledWords.has(item.id)).length} / {list.words.length}</small>
               </button>
@@ -1545,6 +1685,15 @@ function Admin({ lists, token, online, currentUser, sync, progress, disabledWord
           <form className="compact-form" onSubmit={saveList}>
             <input value={draftList.icon} onChange={(event) => setDraftList({ ...draftList, icon: event.target.value })} aria-label="Иконка" />
             <input value={draftList.title} onChange={(event) => setDraftList({ ...draftList, title: event.target.value })} placeholder="Новый список" required />
+            <select
+              value={draftList.language}
+              onChange={(event) => setDraftList({ ...draftList, language: event.target.value as LanguageCode })}
+              aria-label="Язык списка"
+            >
+              {LANGUAGES.map((item) => (
+                <option key={item.code} value={item.code}>{item.short}</option>
+              ))}
+            </select>
             <button className="primary" disabled={!online}>+</button>
           </form>
           {isAdmin && (
@@ -1565,6 +1714,15 @@ function Admin({ lists, token, online, currentUser, sync, progress, disabledWord
               <form className="list-edit-form" onSubmit={updateList}>
                 <input value={listEdit.icon} onChange={(event) => setListEdit({ ...listEdit, icon: event.target.value })} aria-label="Иконка списка" />
                 <input value={listEdit.title} onChange={(event) => setListEdit({ ...listEdit, title: event.target.value })} placeholder="Название списка" required />
+                <select
+                  value={listEdit.language}
+                  onChange={(event) => setListEdit({ ...listEdit, language: event.target.value as LanguageCode })}
+                  aria-label="Язык списка"
+                >
+                  {LANGUAGES.map((item) => (
+                    <option key={item.code} value={item.code}>{item.pair}</option>
+                  ))}
+                </select>
                 <button className="ghost" disabled={!online}>Сохранить</button>
               </form>
               {isAdmin && (
@@ -1613,8 +1771,8 @@ function Admin({ lists, token, online, currentUser, sync, progress, disabledWord
                   {editing ? (
                     <form className="word-edit-form" onSubmit={updateWord}>
                       <input value={wordEdit.ru} onChange={(event) => setWordEdit({ ...wordEdit, ru: event.target.value })} placeholder="Русский текст" required />
-                      <input value={wordEdit.es} onChange={(event) => setWordEdit({ ...wordEdit, es: event.target.value })} placeholder="Испанский текст" required />
-                      <input value={wordEdit.esPronunciation} onChange={(event) => setWordEdit({ ...wordEdit, esPronunciation: event.target.value })} placeholder="Произношение ES" />
+                      <input value={wordEdit.es} onChange={(event) => setWordEdit({ ...wordEdit, es: event.target.value })} placeholder={`Текст (${language.short})`} required />
+                      <input value={wordEdit.esPronunciation} onChange={(event) => setWordEdit({ ...wordEdit, esPronunciation: event.target.value })} placeholder={`Произношение ${language.short}`} />
                       <div className="word-edit-actions">
                         <button className="primary" disabled={!online}>Сохранить</button>
                         <button className="ghost" type="button" onClick={cancelWordEdit}>Отмена</button>
@@ -1663,8 +1821,8 @@ function Admin({ lists, token, online, currentUser, sync, progress, disabledWord
         <form className="panel word-form" onSubmit={saveWord}>
           <h3>Добавить слово</h3>
           <input value={word.ru} onChange={(event) => setWord({ ...word, ru: event.target.value })} placeholder="Русский текст" required />
-          <input value={word.es} onChange={(event) => setWord({ ...word, es: event.target.value })} placeholder="Испанский текст" required />
-          <input value={word.esPronunciation} onChange={(event) => setWord({ ...word, esPronunciation: event.target.value })} placeholder="Произношение ES, если нужно" />
+          <input value={word.es} onChange={(event) => setWord({ ...word, es: event.target.value })} placeholder={`Текст (${language.short})`} required />
+          <input value={word.esPronunciation} onChange={(event) => setWord({ ...word, esPronunciation: event.target.value })} placeholder={`Произношение ${language.short}, если нужно`} />
           <button className="primary wide" disabled={!online || !active}>Добавить</button>
         </form>
       </div>
@@ -1695,7 +1853,7 @@ function Stats({ lists, progress, queue, learnedWordIds }: { lists: WordList[]; 
   );
 }
 
-function Sidebar({ view, setView, email, currentUser, signOut, online, syncing }: {
+function Sidebar({ view, setView, email, currentUser, signOut, online, syncing, language, setLanguage }: {
   view: View;
   setView: (view: View) => void;
   email: string;
@@ -1703,6 +1861,8 @@ function Sidebar({ view, setView, email, currentUser, signOut, online, syncing }
   signOut: () => void;
   online: boolean;
   syncing: boolean;
+  language: LanguageInfo;
+  setLanguage: (code: LanguageCode) => void;
 }) {
   return (
     <aside className="sidebar">
@@ -1710,6 +1870,7 @@ function Sidebar({ view, setView, email, currentUser, signOut, online, syncing }
         <AppIcon />
         <b>Palabra</b>
       </div>
+      <LanguageSwitcher language={language} setLanguage={setLanguage} />
       <nav>
         <NavButton active={view === "learn"} onClick={() => setView("learn")} icon="◎" label="Обучение" />
         <NavButton active={view === "test"} onClick={() => setView("test")} icon="▣" label="Тестирование" />
@@ -1818,13 +1979,22 @@ function ListMultiselect({
   );
 }
 
-function Topbar({ view, online, syncing, sync, notice, signOut }: { view: View; online: boolean; syncing: boolean; sync: () => void; notice: string; signOut: () => void }) {
+function Topbar({ view, online, syncing, sync, notice, signOut, language, setLanguage }: {
+  view: View;
+  online: boolean;
+  syncing: boolean;
+  sync: () => void;
+  notice: string;
+  signOut: () => void;
+  language: LanguageInfo;
+  setLanguage: (code: LanguageCode) => void;
+}) {
   const titles: Record<View, { title: string; subtitle: string }> = {
-    learn: { title: "Обучение", subtitle: "Смотрите перевод и запоминайте слова по порядку." },
-    test: { title: "Тестирование", subtitle: "Проверяйте только уже выученные слова." },
-    admin: { title: "Списки слов", subtitle: "Создавайте темы и управляйте словами." },
+    learn: { title: "Обучение", subtitle: `Смотрите перевод и запоминайте слова: ${language.pair}.` },
+    test: { title: "Тестирование", subtitle: `Проверяйте выученные слова (${language.pair}).` },
+    admin: { title: "Списки слов", subtitle: `Темы для языка: ${language.name}.` },
     users: { title: "Пользователи", subtitle: "Создавайте аккаунты и меняйте доступы." },
-    stats: { title: "Статистика", subtitle: "Смотрите прогресс обучения и тестов." },
+    stats: { title: "Статистика", subtitle: `Прогресс по языку: ${language.name}.` },
   };
   const current = titles[view] ?? titles.learn;
   return (
@@ -1834,16 +2004,48 @@ function Topbar({ view, online, syncing, sync, notice, signOut }: { view: View; 
         <b>Palabra</b>
         <button className="mobile-signout" type="button" onClick={signOut}>Выйти</button>
       </div>
+      <div className="mobile-language">
+        <LanguageSwitcher language={language} setLanguage={setLanguage} compact />
+      </div>
       <div>
         <h1>{current.title}</h1>
         <p>{current.subtitle}</p>
       </div>
-      <div className="sync-pill">
-        <span className={online ? "dot on" : "dot"} />
-        {syncing ? "Синхронизация..." : notice || (online ? "Онлайн" : "Офлайн")}
-        <button onClick={sync} disabled={!online || syncing} aria-label="Синхронизировать">↻</button>
+      <div className="topbar-tools">
+        <div className="sync-pill">
+          <span className={online ? "dot on" : "dot"} />
+          {syncing ? "Синхронизация..." : notice || (online ? "Онлайн" : "Офлайн")}
+          <button onClick={sync} disabled={!online || syncing} aria-label="Синхронизировать">↻</button>
+        </div>
       </div>
     </header>
+  );
+}
+
+function LanguageSwitcher({ language, setLanguage, compact = false }: {
+  language: LanguageInfo;
+  setLanguage: (code: LanguageCode) => void;
+  compact?: boolean;
+}) {
+  return (
+    <div className={`language-switcher ${compact ? "compact" : ""}`} role="group" aria-label="Язык обучения">
+      {!compact && <span className="language-label">Язык</span>}
+      <div className="language-options">
+        {LANGUAGES.map((item) => (
+          <button
+            key={item.code}
+            type="button"
+            className={item.code === language.code ? "active" : ""}
+            onClick={() => setLanguage(item.code)}
+            title={`${item.name} (${item.pair})`}
+            aria-pressed={item.code === language.code}
+          >
+            <b>{item.short}</b>
+            {!compact && <small>{item.name}</small>}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 

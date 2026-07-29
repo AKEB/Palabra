@@ -1,7 +1,7 @@
 {
   "name": "Palabra",
   "short_name": "Palabra",
-  "description": "PWA для изучения испанских слов и фраз.",
+  "description": "PWA для изучения слов: RU → ES / EN / AM / GE.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
