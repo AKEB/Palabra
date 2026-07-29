@@ -826,14 +826,10 @@ function Learn({ lists, language, selectedLists, setSelectedLists, learnedWordId
   const learnedCount = selectedAllWords.filter((word) => learnedWords.has(word.id)).length;
   const sessionTotal = selectedAllWords.length;
 
-  function orderSession(learnedSet: Set<string>, options?: { unknownId?: string; justLearnedId?: string }) {
-    const justLearnedId = options?.justLearnedId;
+  function orderSession(learnedSet: Set<string>, options?: { unknownId?: string }) {
     const learned = selectedAllWords
-      .filter((word) => learnedSet.has(word.id) && word.id !== justLearnedId)
+      .filter((word) => learnedSet.has(word.id))
       .map((word) => word.id);
-    if (justLearnedId && learnedSet.has(justLearnedId)) {
-      learned.unshift(justLearnedId);
-    }
     let unlearned = selectedAllWords
       .filter((word) => !learnedSet.has(word.id))
       .map((word) => word.id);
@@ -889,12 +885,11 @@ function Learn({ lists, language, selectedLists, setSelectedLists, learnedWordId
   async function onRemembered() {
     if (!current) return;
     const id = current.id;
+    const nextId = session.length
+      ? session[currentIndex >= session.length - 1 ? 0 : currentIndex + 1]
+      : id;
     await markWordLearned(id, true);
-    const learnedSet = new Set(learnedWords);
-    learnedSet.add(id);
-    const { ids, unlearned } = orderSession(learnedSet, { justLearnedId: id });
-    setSession(ids);
-    setCurrentId(unlearned[0] ?? ids[0] ?? id);
+    setCurrentId(nextId);
     setFlipped(false);
   }
 
