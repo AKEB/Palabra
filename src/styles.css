@@ -876,11 +876,11 @@ select:focus {
 
 .language-select {
   min-height: 34px;
-  width: 74px;
-  padding: 0 28px 0 10px;
+  width: 88px;
+  padding: 0 32px 0 14px;
   border-color: #dfe5e9;
   color: #46515f;
-  font-size: 0.84rem;
+  font-size: 0.9rem;
   font-weight: 850;
   background-color: #fff;
 }
@@ -1491,8 +1491,8 @@ select:focus {
   }
 
   .mobile-brand .language-select {
-    width: 66px;
-    min-width: 66px;
+    width: 88px;
+    min-width: 88px;
   }
 
   .topbar p {
