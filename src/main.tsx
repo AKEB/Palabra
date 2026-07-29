@@ -359,7 +359,8 @@ function App() {
   const [queue, setQueue] = useState<ProgressEvent[]>([]);
   const [disabledWordIds, setDisabledWordIds] = useState<string[]>([]);
   const [learnedWordIds, setLearnedWordIds] = useState<string[]>([]);
-  const [selectedLists, setSelectedLists] = useState<string[]>([]);
+  const [learnSelectedLists, setLearnSelectedLists] = useState<string[]>([]);
+  const [testSelectedLists, setTestSelectedLists] = useState<string[]>([]);
   const [mode, setMode] = useState<Mode>("flash-ru-es");
   const [view, setView] = useState<View>("learn");
   const [online, setOnline] = useState(navigator.onLine);
@@ -374,11 +375,16 @@ function App() {
       const cachedQueue = await dbGet<ProgressEvent[]>(userCacheKey(email, "queue"), []);
       const cachedDisabledWordIds = await dbGet<string[]>(userCacheKey(email, "disabledWordIds"), []);
       const cachedLearnedWordIds = await dbGet<string[]>(userCacheKey(email, "learnedWordIds"), []);
-      const cachedSelectedLists = await dbGet<string[]>(userCacheKey(email, "selectedLists"), []);
+      const legacySelectedLists = await dbGet<string[]>(userCacheKey(email, "selectedLists"), []);
+      const cachedLearnSelectedLists = await dbGet<string[]>(userCacheKey(email, "learnSelectedLists"), legacySelectedLists);
+      const cachedTestSelectedLists = await dbGet<string[]>(userCacheKey(email, "testSelectedLists"), legacySelectedLists);
       setLists(cachedLists);
-      const availableLists = cachedLists;
-      const validSelectedLists = cachedSelectedLists.filter((id) => availableLists.some((list) => list.id === id));
-      setSelectedLists(validSelectedLists.length ? validSelectedLists : availableLists.slice(0, 1).map((item) => item.id));
+      const pickSelected = (cached: string[]) => {
+        const valid = cached.filter((id) => cachedLists.some((list) => list.id === id));
+        return valid.length ? valid : cachedLists.slice(0, 1).map((item) => item.id);
+      };
+      setLearnSelectedLists(pickSelected(cachedLearnSelectedLists));
+      setTestSelectedLists(pickSelected(cachedTestSelectedLists));
       setProgress(cachedProgress);
       setQueue(cachedQueue);
       setDisabledWordIds(cachedDisabledWordIds);
@@ -456,12 +462,20 @@ function App() {
       setEmail(data.email);
       setCurrentUser(data.user);
       localStorage.setItem("palabra-email", data.email);
-      setSelectedLists((current) => {
+      setLearnSelectedLists((current) => {
         const validSelected = current.filter((id) => data.lists.some((list) => list.id === id));
         const selectedTitles = previousLists.filter((list) => current.includes(list.id)).map((list) => list.title);
         const titleMatched = data.lists.filter((list) => selectedTitles.includes(list.title)).map((list) => list.id);
         const nextSelected = validSelected.length ? validSelected : titleMatched.length ? titleMatched : data.lists.slice(0, 1).map((list) => list.id);
-        dbSet(userCacheKey(data.email, "selectedLists"), nextSelected).catch(() => undefined);
+        dbSet(userCacheKey(data.email, "learnSelectedLists"), nextSelected).catch(() => undefined);
+        return nextSelected;
+      });
+      setTestSelectedLists((current) => {
+        const validSelected = current.filter((id) => data.lists.some((list) => list.id === id));
+        const selectedTitles = previousLists.filter((list) => current.includes(list.id)).map((list) => list.title);
+        const titleMatched = data.lists.filter((list) => selectedTitles.includes(list.title)).map((list) => list.id);
+        const nextSelected = validSelected.length ? validSelected : titleMatched.length ? titleMatched : data.lists.slice(0, 1).map((list) => list.id);
+        dbSet(userCacheKey(data.email, "testSelectedLists"), nextSelected).catch(() => undefined);
         return nextSelected;
       });
       setNotice("Синхронизировано");
@@ -515,7 +529,8 @@ function App() {
     setQueue([]);
     setDisabledWordIds([]);
     setLearnedWordIds([]);
-    setSelectedLists([]);
+    setLearnSelectedLists([]);
+    setTestSelectedLists([]);
     setView("learn");
     setNotice("");
   }
@@ -536,8 +551,8 @@ function App() {
         {view === "learn" && (
           <Learn
             lists={lists}
-            selectedLists={selectedLists}
-            setSelectedLists={setSelectedLists}
+            selectedLists={learnSelectedLists}
+            setSelectedLists={setLearnSelectedLists}
             learnedWordIds={learnedWordIds}
             markWordLearned={markWordLearned}
           />
@@ -545,8 +560,8 @@ function App() {
         {view === "test" && (
           <Test
             lists={lists}
-            selectedLists={selectedLists}
-            setSelectedLists={setSelectedLists}
+            selectedLists={testSelectedLists}
+            setSelectedLists={setTestSelectedLists}
             mode={mode}
             setMode={setMode}
             progress={progress}
@@ -678,12 +693,30 @@ function Learn({ lists, selectedLists, setSelectedLists, learnedWordIds, markWor
   const learnedCount = selectedAllWords.filter((word) => learnedWords.has(word.id)).length;
   const sessionTotal = selectedAllWords.length;
 
+  function orderSession(learnedSet: Set<string>, options?: { unknownId?: string; justLearnedId?: string }) {
+    const justLearnedId = options?.justLearnedId;
+    const learned = selectedAllWords
+      .filter((word) => learnedSet.has(word.id) && word.id !== justLearnedId)
+      .map((word) => word.id);
+    if (justLearnedId && learnedSet.has(justLearnedId)) {
+      learned.unshift(justLearnedId);
+    }
+    let unlearned = selectedAllWords
+      .filter((word) => !learnedSet.has(word.id))
+      .map((word) => word.id);
+    const unknownId = options?.unknownId;
+    if (unknownId && unlearned.includes(unknownId)) {
+      unlearned = unlearned.filter((id) => id !== unknownId);
+      const index = Math.min(RETRY_AFTER_WORDS, unlearned.length);
+      unlearned = [...unlearned.slice(0, index), unknownId, ...unlearned.slice(index)];
+    }
+    return { ids: [...learned, ...unlearned], unlearned };
+  }
+
   function restartSession() {
-    const unlearned = selectedAllWords.filter((word) => !learnedWords.has(word.id)).map((word) => word.id);
-    const learned = selectedAllWords.filter((word) => learnedWords.has(word.id)).map((word) => word.id);
-    const ids = [...unlearned, ...learned];
+    const { ids, unlearned } = orderSession(learnedWords);
     setSession(ids);
-    setCurrentId(ids[0] ?? "");
+    setCurrentId(unlearned[0] ?? ids[0] ?? "");
     setFlipped(false);
   }
 
@@ -698,7 +731,7 @@ function Learn({ lists, selectedLists, setSelectedLists, learnedWordIds, markWor
 
   function applySelectedLists(ids: string[]) {
     setSelectedLists(ids);
-    dbSet(userCacheKey(localStorage.getItem("palabra-email") || "", "selectedLists"), ids).catch(() => undefined);
+    dbSet(userCacheKey(localStorage.getItem("palabra-email") || "", "learnSelectedLists"), ids).catch(() => undefined);
   }
 
   function toggleList(id: string) {
@@ -720,36 +753,29 @@ function Learn({ lists, selectedLists, setSelectedLists, learnedWordIds, markWor
     setFlipped(false);
   }
 
-  function goToNextUnlearned(fromId: string) {
-    const fromIndex = session.indexOf(fromId);
-    for (let offset = 1; offset <= session.length; offset += 1) {
-      const id = session[(fromIndex + offset) % session.length];
-      if (!learnedWords.has(id) && id !== fromId) {
-        setCurrentId(id);
-        return;
-      }
-    }
-    const nextIndex = fromIndex >= session.length - 1 ? 0 : fromIndex + 1;
-    setCurrentId(session[nextIndex] ?? fromId);
-  }
-
   async function onRemembered() {
     if (!current) return;
-    await markWordLearned(current.id, true);
+    const id = current.id;
+    await markWordLearned(id, true);
+    const learnedSet = new Set(learnedWords);
+    learnedSet.add(id);
+    const { ids, unlearned } = orderSession(learnedSet, { justLearnedId: id });
+    setSession(ids);
+    setCurrentId(unlearned[0] ?? ids[0] ?? id);
     setFlipped(false);
-    goToNextUnlearned(current.id);
   }
 
   async function onUnknown() {
     if (!current) return;
-    if (learnedWords.has(current.id)) {
-      await markWordLearned(current.id, false);
+    const id = current.id;
+    if (learnedWords.has(id)) {
+      await markWordLearned(id, false);
     }
-    const others = session.filter((id) => id !== current.id);
-    const index = Math.min(RETRY_AFTER_WORDS, others.length);
-    const next = [...others.slice(0, index), current.id, ...others.slice(index)];
-    setSession(next);
-    setCurrentId(next[0] ?? current.id);
+    const learnedSet = new Set(learnedWords);
+    learnedSet.delete(id);
+    const { ids, unlearned } = orderSession(learnedSet, { unknownId: id });
+    setSession(ids);
+    setCurrentId(unlearned[0] ?? id);
     setFlipped(false);
   }
 
@@ -978,7 +1004,7 @@ function Test({ lists, selectedLists, setSelectedLists, mode, setMode, progress,
 
   function applySelectedLists(ids: string[]) {
     setSelectedLists(ids);
-    dbSet(userCacheKey(localStorage.getItem("palabra-email") || "", "selectedLists"), ids).catch(() => undefined);
+    dbSet(userCacheKey(localStorage.getItem("palabra-email") || "", "testSelectedLists"), ids).catch(() => undefined);
   }
 
   function toggleList(id: string) {
