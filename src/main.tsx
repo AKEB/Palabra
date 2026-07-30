@@ -9,6 +9,7 @@ type Word = {
   es: string;
   esPronunciation?: string;
   esAudioUrl?: string;
+  hint?: string;
   updatedAt?: string;
 };
 
@@ -43,6 +44,7 @@ type Progress = {
 };
 
 type PracticeKind = "oral" | "written-es" | "ignored";
+type MasteryKind = "oral" | "written";
 
 type ProgressEvent = {
   id: string;
@@ -78,7 +80,9 @@ type LanguageInfo = {
 const STORE = "palabra-store";
 const DB_NAME = "palabra-db";
 const DB_VERSION = 1;
-const STUDY_SESSION_SIZE = 30;
+const SESSION_WORST_COUNT = 20;
+const SESSION_BEST_COUNT = 10;
+const SESSION_BEST_POOL = 40;
 const RETRY_AFTER_WORDS = 5;
 const LANGUAGE_STORAGE_KEY = "palabra-language";
 
@@ -300,8 +304,8 @@ function escapeCsvField(value: string) {
 
 function wordsToCsv(words: Word[]) {
   const rows = [
-    ["ru", "es", "esPronunciation"],
-    ...words.map((word) => [word.ru, word.es, word.esPronunciation ?? ""]),
+    ["ru", "es", "esPronunciation", "hint"],
+    ...words.map((word) => [word.ru, word.es, word.esPronunciation ?? "", word.hint ?? ""]),
   ];
   return rows.map((row) => row.map(escapeCsvField).join(",")).join("\n");
 }
@@ -347,11 +351,13 @@ function csvRowsToWordDrafts(text: string) {
   const first = rows[0]?.map((value) => value.trim().toLowerCase());
   const hasHeader = first?.[0] === "ru" && first?.[1] === "es";
   const esPronunciationIndex = hasHeader && first ? first.indexOf("espronunciation") : -1;
+  const hintIndex = hasHeader && first ? first.indexOf("hint") : -1;
   return rows.slice(hasHeader ? 1 : 0)
     .map((row) => ({
       ru: (row[0] ?? "").trim(),
       es: (row[1] ?? "").trim(),
       esPronunciation: (row[esPronunciationIndex >= 0 ? esPronunciationIndex : row.length >= 4 ? 3 : 2] ?? "").trim(),
+      hint: (hintIndex >= 0 ? row[hintIndex] ?? "" : "").trim(),
     }))
     .filter((item) => item.ru && item.es);
 }
@@ -437,44 +443,68 @@ function wrongTotal(item?: Progress) {
   return (item?.unknownCount ?? 0) + (item?.wrongCount ?? 0);
 }
 
-function progressGap(item?: Progress) {
-  return correctTotal(item) - wrongTotal(item);
+function practiceMasteryCorrect(item: Progress | undefined, kind: MasteryKind) {
+  return kind === "oral" ? (item?.masteryOralCorrect ?? 0) : (item?.masteryWrittenCorrect ?? 0);
 }
 
-function totalAttempts(item?: Progress) {
-  return correctTotal(item) + wrongTotal(item);
+function practiceMasteryWrong(item: Progress | undefined, kind: MasteryKind) {
+  return kind === "oral" ? (item?.masteryOralWrong ?? 0) : (item?.masteryWrittenWrong ?? 0);
 }
 
-function studyWeight(word: Word, progress: Record<string, Progress>, strongestGap: number, mostAttempts: number) {
-  const item = progress[word.id];
-  const attempts = totalAttempts(item);
-  const weakPriority = Math.min(40, Math.max(0, strongestGap - progressGap(item)));
-  const errorPriority = Math.min(20, wrongTotal(item) * 3);
-  const rarePriority = Math.min(18, Math.max(0, mostAttempts - attempts) / 2);
-  const masteredPenalty = wrongTotal(item) === 0 && correctTotal(item) > 5 ? 0.35 : 1;
-  return Math.max(0.2, (1 + weakPriority + errorPriority + rarePriority) * masteredPenalty);
+function practiceMasteryGap(item: Progress | undefined, kind: MasteryKind) {
+  return practiceMasteryCorrect(item, kind) - practiceMasteryWrong(item, kind);
 }
 
-function weightedStudyOrder(words: Word[], progress: Record<string, Progress>) {
+function shuffleIds(ids: string[]) {
+  const next = [...ids];
+  for (let index = next.length - 1; index > 0; index -= 1) {
+    const swap = Math.floor(Math.random() * (index + 1));
+    [next[index], next[swap]] = [next[swap], next[index]];
+  }
+  return next;
+}
+
+function pickRandomIds(ids: string[], count: number) {
+  return shuffleIds(ids).slice(0, Math.max(0, count));
+}
+
+function masteryKindForMode(mode: Mode): MasteryKind {
+  return mode.startsWith("type") ? "written" : "oral";
+}
+
+function buildTestSession(words: Word[], progress: Record<string, Progress>, kind: MasteryKind) {
   if (!words.length) return [];
-  const gaps = words.map((word) => progressGap(progress[word.id]));
-  const strongestGap = Math.max(...gaps, 0);
-  const mostAttempts = Math.max(...words.map((word) => totalAttempts(progress[word.id])), 0);
-  return words
-    .map((word) => {
-      const weight = studyWeight(word, progress, strongestGap, mostAttempts);
-      return {
-        id: word.id,
-        priority: Math.log(Math.random()) / weight,
-      };
-    })
-    .sort((left, right) => right.priority - left.priority)
-    .slice(0, STUDY_SESSION_SIZE)
-    .map((item) => item.id);
+
+  const sortedWorstFirst = [...words].sort((left, right) => {
+    const leftItem = progress[left.id];
+    const rightItem = progress[right.id];
+    const gapDiff = practiceMasteryGap(leftItem, kind) - practiceMasteryGap(rightItem, kind);
+    if (gapDiff !== 0) return gapDiff;
+    const wrongDiff = practiceMasteryWrong(rightItem, kind) - practiceMasteryWrong(leftItem, kind);
+    if (wrongDiff !== 0) return wrongDiff;
+    return practiceMasteryCorrect(leftItem, kind) - practiceMasteryCorrect(rightItem, kind);
+  });
+
+  const worst = sortedWorstFirst.slice(0, Math.min(SESSION_WORST_COUNT, sortedWorstFirst.length));
+  const remaining = sortedWorstFirst.slice(worst.length);
+  const sortedBestFirst = [...remaining].sort((left, right) => {
+    const leftItem = progress[left.id];
+    const rightItem = progress[right.id];
+    const gapDiff = practiceMasteryGap(rightItem, kind) - practiceMasteryGap(leftItem, kind);
+    if (gapDiff !== 0) return gapDiff;
+    return practiceMasteryCorrect(rightItem, kind) - practiceMasteryCorrect(leftItem, kind);
+  });
+
+  const bestPoolSize = Math.min(sortedBestFirst.length, Math.max(SESSION_BEST_COUNT, SESSION_BEST_POOL));
+  const bestPoolIds = sortedBestFirst.slice(0, bestPoolSize).map((word) => word.id);
+  const bestIds = pickRandomIds(bestPoolIds, Math.min(SESSION_BEST_COUNT, bestPoolIds.length));
+  const worstIds = worst.map((word) => word.id);
+
+  return shuffleIds([...worstIds, ...bestIds]);
 }
 
 function getPracticeKind(mode: Mode): PracticeKind {
-  if (mode === "type-ru-es") return "written-es";
+  if (mode.startsWith("type")) return "written-es";
   if (mode === "flash-ru-es" || mode === "flash-es-ru") return "oral";
   return "ignored";
 }
@@ -1091,6 +1121,7 @@ function Learn({ lists, language, selectedLists, setSelectedLists, learnedWordId
               {currentLearned && <span className="learned-badge" aria-label="Выучено">✓</span>}
               {flipped && <span className="card-prompt">{current.ru}</span>}
               <span className="card-word">{flipped ? current.es : current.ru}</span>
+              {current.hint && <span className="word-hint">{current.hint}</span>}
               {flipped && current.esPronunciation && <span className="pronunciation">{current.esPronunciation}</span>}
               {flipped && current.esAudioUrl && (
                 <button
@@ -1170,7 +1201,7 @@ function Test({ lists, language, selectedLists, setSelectedLists, mode, setMode,
   const modePickerRef = useRef<HTMLDivElement | null>(null);
 
   function restartSession() {
-    const ids = weightedStudyOrder(words, progress);
+    const ids = buildTestSession(words, progress, masteryKindForMode(mode));
     setSession(ids);
     setSessionTotal(ids.length);
     setCurrentId(ids[0] ?? "");
@@ -1183,6 +1214,11 @@ function Test({ lists, language, selectedLists, setSelectedLists, mode, setMode,
   useEffect(() => {
     restartSession();
   }, [wordIdsKey, mode]);
+
+  useEffect(() => {
+    if (!needsAcknowledge) return;
+    window.requestAnimationFrame(() => answerInputRef.current?.focus());
+  }, [needsAcknowledge, currentId]);
 
   useEffect(() => {
     if (!modeMenuOpen) return;
@@ -1228,9 +1264,8 @@ function Test({ lists, language, selectedLists, setSelectedLists, mode, setMode,
     setNeedsAcknowledge(false);
   }
 
-  function nextUnknown() {
+  function requeueCurrent() {
     if (!current) return;
-    mark(current.id, typeMode ? "wrong" : "unknown", practiceKind);
     const others = session.filter((id) => id !== current.id);
     const index = Math.min(RETRY_AFTER_WORDS, others.length);
     const next = [...others.slice(0, index), current.id, ...others.slice(index)];
@@ -1242,22 +1277,55 @@ function Test({ lists, language, selectedLists, setSelectedLists, mode, setMode,
     setNeedsAcknowledge(false);
   }
 
-  function checkAnswer(event: React.FormEvent) {
-    event.preventDefault();
+  function nextUnknown() {
     if (!current) return;
+    mark(current.id, typeMode ? "wrong" : "unknown", practiceKind);
+    requeueCurrent();
+  }
+
+  function advanceAfterWrittenMiss() {
+    requeueCurrent();
+  }
+
+  function expectedAnswers() {
+    if (!current) return [] as string[];
     const expected = mode === "type-ru-es" ? current.es : current.ru;
-    const normalized = normalizeAnswer(answer);
     const accepted = [expected];
     if (mode === "type-ru-es" && (language.code === "zh" || language.code === "ar" || language.code === "el") && current.esPronunciation) {
       accepted.push(current.esPronunciation);
     }
-    if (accepted.some((item) => normalizeAnswer(item) === normalized)) {
+    return accepted;
+  }
+
+  function checkAnswer(event: React.FormEvent) {
+    event.preventDefault();
+    if (!current) return;
+    const accepted = expectedAnswers();
+    const expected = accepted[0];
+    const normalized = normalizeAnswer(answer);
+    const isCorrect = accepted.some((item) => normalizeAnswer(item) === normalized);
+
+    if (needsAcknowledge) {
+      if (isCorrect) {
+        setFeedback("Запомнили. Продолжаем");
+        window.setTimeout(advanceAfterWrittenMiss, 350);
+      } else {
+        setFeedback(`Ещё раз. Правильно: ${expected}`);
+        setAnswer("");
+      }
+      return;
+    }
+
+    if (isCorrect) {
       setFeedback(`Верно: ${expected}`);
       window.setTimeout(nextKnown, 450);
-    } else {
-      setFeedback(`Пока нет. Правильно: ${expected}`);
-      setNeedsAcknowledge(true);
+      return;
     }
+
+    mark(current.id, "wrong", practiceKind);
+    setFeedback(`Неверно. Напишите правильно: ${expected}`);
+    setAnswer("");
+    setNeedsAcknowledge(true);
   }
 
   function insertAccent(char: string) {
@@ -1374,6 +1442,7 @@ function Test({ lists, language, selectedLists, setSelectedLists, mode, setMode,
               <span className="card-counter">{currentStep} / {sessionTotal}</span>
               {flipped && mode === "flash-ru-es" && <span className="card-prompt">{current.ru}</span>}
               <span className="card-word">{!flipped ? (mode === "flash-ru-es" ? current.ru : current.es) : (mode === "flash-ru-es" ? current.es : current.ru)}</span>
+              {current.hint && <span className="word-hint">{current.hint}</span>}
               {((flipped && mode === "flash-ru-es") || (!flipped && mode === "flash-es-ru")) && current.esPronunciation && (
                 <span className="pronunciation">{current.esPronunciation}</span>
               )}
@@ -1401,27 +1470,39 @@ function Test({ lists, language, selectedLists, setSelectedLists, mode, setMode,
         )}
         {current && typeMode && (
           <form className="typing-card" onSubmit={checkAnswer}>
-            <p>{mode === "type-ru-es" ? `Как будет на ${language.adjective}?` : "Как будет по-русски?"}</p>
+            <p>
+              {needsAcknowledge
+                ? "Напишите правильный ответ, чтобы запомнить"
+                : mode === "type-ru-es"
+                  ? `Как будет на ${language.adjective}?`
+                  : "Как будет по-русски?"}
+            </p>
             <h3>{mode === "type-ru-es" ? current.ru : current.es}</h3>
+            {current.hint && <p className="word-hint">{current.hint}</p>}
+            {needsAcknowledge && (
+              <p className="correction-expected">Правильно: <strong>{expectedAnswers()[0]}</strong></p>
+            )}
             <input
               ref={answerInputRef}
               value={answer}
               onChange={(event) => setAnswer(event.target.value)}
               autoFocus
-              placeholder="Введите ответ"
-              disabled={needsAcknowledge}
+              placeholder={needsAcknowledge ? "Введите правильный ответ" : "Введите ответ"}
               lang={mode === "type-ru-es" ? language.htmlLang : "ru"}
               autoCorrect="off"
               autoCapitalize="none"
               spellCheck={false}
             />
-            {feedback && <div className={feedback.startsWith("Верно") ? "feedback ok" : "feedback bad"}>{feedback}</div>}
-            {!needsAcknowledge && <button className="primary wide">Проверить</button>}
-            {needsAcknowledge && <button className="primary wide" type="button" onClick={nextUnknown}>Понял</button>}
+            {feedback && (
+              <div className={feedback.startsWith("Верно") || feedback.startsWith("Запомнили") ? "feedback ok" : "feedback bad"}>
+                {feedback}
+              </div>
+            )}
+            <button className="primary wide">{needsAcknowledge ? "Проверить написание" : "Проверить"}</button>
             {mode === "type-ru-es" && language.keys.length > 0 && (
               <div className={`accent-keys ${language.keys.length > 12 ? "wide" : ""}`} aria-label={`Символы: ${language.name}`}>
                 {language.keys.map((char) => (
-                  <button key={char} type="button" onClick={() => insertAccent(char)} aria-label={`Вставить ${char}`} disabled={needsAcknowledge}>
+                  <button key={char} type="button" onClick={() => insertAccent(char)} aria-label={`Вставить ${char}`}>
                     {char}
                   </button>
                 ))}
@@ -1639,9 +1720,9 @@ function Admin({ lists, language, token, online, currentUser, sync, progress, di
   const [activeListId, setActiveListId] = useState(lists[0]?.id ?? "");
   const [draftList, setDraftList] = useState({ title: "", icon: "📚", color: "#087d86", isGlobal: false, language: language.code });
   const [listEdit, setListEdit] = useState({ title: "", icon: "📚", isGlobal: false, language: language.code });
-  const [word, setWord] = useState({ ru: "", es: "", esPronunciation: "" });
+  const [word, setWord] = useState({ ru: "", es: "", esPronunciation: "", hint: "" });
   const [editingWordId, setEditingWordId] = useState("");
-  const [wordEdit, setWordEdit] = useState({ ru: "", es: "", esPronunciation: "" });
+  const [wordEdit, setWordEdit] = useState({ ru: "", es: "", esPronunciation: "", hint: "" });
   const [confirmDeleteList, setConfirmDeleteList] = useState(false);
   const [adminLists, setAdminLists] = useState<WordList[]>([]);
   const importInputRef = useRef<HTMLInputElement | null>(null);
@@ -1760,7 +1841,7 @@ function Admin({ lists, language, token, online, currentUser, sync, progress, di
     } else {
       await persistLists(lists.map((list) => list.id === active.id ? { ...list, words: [...list.words, created] } : list));
     }
-    setWord({ ru: "", es: "", esPronunciation: "" });
+    setWord({ ru: "", es: "", esPronunciation: "", hint: "" });
     setNotice("Слово добавлено");
   }
 
@@ -1770,12 +1851,13 @@ function Admin({ lists, language, token, online, currentUser, sync, progress, di
       ru: item.ru,
       es: item.es,
       esPronunciation: item.esPronunciation ?? "",
+      hint: item.hint ?? "",
     });
   }
 
   function cancelWordEdit() {
     setEditingWordId("");
-    setWordEdit({ ru: "", es: "", esPronunciation: "" });
+    setWordEdit({ ru: "", es: "", esPronunciation: "", hint: "" });
   }
 
   async function updateWord(event: React.FormEvent) {
@@ -1918,6 +2000,7 @@ function Admin({ lists, language, token, online, currentUser, sync, progress, di
                       <input value={wordEdit.ru} onChange={(event) => setWordEdit({ ...wordEdit, ru: event.target.value })} placeholder="Русский текст" required />
                       <input value={wordEdit.es} onChange={(event) => setWordEdit({ ...wordEdit, es: event.target.value })} placeholder={`Текст (${language.short})`} required />
                       <input value={wordEdit.esPronunciation} onChange={(event) => setWordEdit({ ...wordEdit, esPronunciation: event.target.value })} placeholder={`Произношение ${language.short}`} />
+                      <input value={wordEdit.hint} onChange={(event) => setWordEdit({ ...wordEdit, hint: event.target.value })} placeholder="Подсказка" />
                       <div className="word-edit-actions">
                         <button className="primary" disabled={!online}>Сохранить</button>
                         <button className="ghost" type="button" onClick={cancelWordEdit}>Отмена</button>
@@ -1925,7 +2008,10 @@ function Admin({ lists, language, token, online, currentUser, sync, progress, di
                     </form>
                   ) : (
                     <>
-                      <div><b>{item.ru}</b></div>
+                      <div>
+                        <b>{item.ru}</b>
+                        {item.hint && <small className="word-hint-inline">{item.hint}</small>}
+                      </div>
                       <div>
                         <b>{item.es}</b>
                         <small>{item.esPronunciation}</small>
@@ -1968,6 +2054,7 @@ function Admin({ lists, language, token, online, currentUser, sync, progress, di
           <input value={word.ru} onChange={(event) => setWord({ ...word, ru: event.target.value })} placeholder="Русский текст" required />
           <input value={word.es} onChange={(event) => setWord({ ...word, es: event.target.value })} placeholder={`Текст (${language.short})`} required />
           <input value={word.esPronunciation} onChange={(event) => setWord({ ...word, esPronunciation: event.target.value })} placeholder={`Произношение ${language.short}, если нужно`} />
+          <input value={word.hint} onChange={(event) => setWord({ ...word, hint: event.target.value })} placeholder="Подсказка, если нужно" />
           <button className="primary wide" disabled={!online || !active}>Добавить</button>
         </form>
       </div>
@@ -2039,7 +2126,6 @@ function Stats({ lists, progress, queue, learnedWordIds }: { lists: WordList[]; 
   );
 }
 
-type MasteryKind = "oral" | "written";
 type MasteryRank = "best" | "worst";
 
 type MasteryRow = {

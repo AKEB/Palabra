@@ -19,6 +19,7 @@ const pool = new Pool({ connectionString: DATABASE_URL });
 
 await initDb();
 await seedFlashcardoGlobalLists();
+await syncFlashcardoWordMetadata();
 
 createServer(async (request, response) => {
   try {
@@ -64,6 +65,7 @@ async function initDb() {
       es text not null,
       es_pronunciation text not null default '',
       es_audio_url text not null default '',
+      hint text not null default '',
       updated_at timestamptz not null default now()
     );
 
@@ -103,6 +105,7 @@ async function initDb() {
   await pool.query("alter table word_lists add column if not exists source text not null default ''");
   await pool.query("alter table word_lists add column if not exists language text not null default 'es'");
   await pool.query("alter table words add column if not exists es_audio_url text not null default ''");
+  await pool.query("alter table words add column if not exists hint text not null default ''");
   await pool.query(`
     update users
     set is_admin = true
@@ -122,6 +125,15 @@ async function initDb() {
   await pool.query("alter table words drop column if exists ru_pronunciation");
   await pool.query("update word_lists set language = 'es' where language is null or language = ''");
   await pool.query("update word_lists set source = 'flashcardo:es', language = 'es' where source = 'flashcardo'");
+  await pool.query(`
+    update words w
+    set ru = 'тот', updated_at = now()
+    from word_lists l
+    where w.list_id = l.id
+      and (l.source = 'flashcardo:es' or l.source = 'flashcardo')
+      and w.es = 'ese'
+      and w.ru = 'что'
+  `);
 }
 
 function normalizeLanguage(value, fallback = "es") {
@@ -180,7 +192,7 @@ async function seedFlashcardoGlobalLists() {
         const es = String(word.es || "").trim();
         if (!ru || !es) continue;
         await client.query(
-          "insert into words (id, list_id, ru, es, es_pronunciation, es_audio_url) values ($1, $2, $3, $4, $5, $6)",
+          "insert into words (id, list_id, ru, es, es_pronunciation, es_audio_url, hint) values ($1, $2, $3, $4, $5, $6, $7)",
           [
             randomUUID(),
             listId,
@@ -188,6 +200,7 @@ async function seedFlashcardoGlobalLists() {
             es,
             String(word.esPronunciation || ""),
             String(word.esAudioUrl || ""),
+            String(word.hint || "").trim(),
           ]
         );
       }
@@ -200,6 +213,45 @@ async function seedFlashcardoGlobalLists() {
     console.error("Flashcardo import failed", error);
   } finally {
     client.release();
+  }
+}
+
+async function syncFlashcardoWordMetadata() {
+  if (!existsSync(flashcardoSeedPath)) return;
+
+  const payload = JSON.parse(readFileSync(flashcardoSeedPath, "utf8"));
+  const lists = Array.isArray(payload.lists) ? payload.lists : [];
+  if (!lists.length) return;
+
+  const hintsByAudio = new Map();
+  for (const list of lists) {
+    for (const word of list.words || []) {
+      const audioUrl = String(word.esAudioUrl || "").trim();
+      const hint = String(word.hint || "").trim();
+      if (!audioUrl || !hint) continue;
+      hintsByAudio.set(audioUrl, hint);
+    }
+  }
+
+  if (!hintsByAudio.size) return;
+
+  let updated = 0;
+  const { rows: dbWords } = await pool.query(
+    "select id, hint, es_audio_url from words where coalesce(es_audio_url, '') <> ''"
+  );
+  for (const dbWord of dbWords) {
+    const hint = hintsByAudio.get(String(dbWord.es_audio_url || ""));
+    if (!hint) continue;
+    if (String(dbWord.hint || "") === hint) continue;
+    await pool.query(
+      "update words set hint = $1, updated_at = now() where id = $2",
+      [hint, dbWord.id]
+    );
+    updated += 1;
+  }
+
+  if (updated) {
+    console.log(`Synced Flashcardo hints for ${updated} words`);
   }
 }
 
@@ -443,8 +495,8 @@ async function handleApi(request, response, url) {
     const es = String(body.es || "").trim();
     if (!ru || !es) return sendJson(response, 400, { error: "Нужны русский текст и перевод" });
     const { rows } = await pool.query(
-      "insert into words (id, list_id, ru, es, es_pronunciation, es_audio_url) values ($1, $2, $3, $4, $5, $6) returning *",
-      [randomUUID(), listId, ru, es, String(body.esPronunciation || ""), String(body.esAudioUrl || "")]
+      "insert into words (id, list_id, ru, es, es_pronunciation, es_audio_url, hint) values ($1, $2, $3, $4, $5, $6, $7) returning *",
+      [randomUUID(), listId, ru, es, String(body.esPronunciation || ""), String(body.esAudioUrl || ""), String(body.hint || "").trim()]
     );
     await pool.query("update word_lists set updated_at = now() where id = $1", [listId]);
     return sendJson(response, 201, mapWord(rows[0]));
@@ -461,11 +513,11 @@ async function handleApi(request, response, url) {
     const { rows } = await pool.query(
       `
         update words
-        set ru = $1, es = $2, es_pronunciation = $3, es_audio_url = coalesce(nullif($4, ''), words.es_audio_url), updated_at = now()
-        where id = $5
+        set ru = $1, es = $2, es_pronunciation = $3, es_audio_url = coalesce(nullif($4, ''), words.es_audio_url), hint = $5, updated_at = now()
+        where id = $6
         returning *
       `,
-      [ru, es, String(body.esPronunciation || ""), String(body.esAudioUrl || ""), wordId]
+      [ru, es, String(body.esPronunciation || ""), String(body.esAudioUrl || ""), String(body.hint || "").trim(), wordId]
     );
     await pool.query("update word_lists set updated_at = now() where id = $1", [rows[0].list_id]);
     return sendJson(response, 200, mapWord(rows[0]));
@@ -690,6 +742,7 @@ function mapWord(row) {
     es: row.es,
     esPronunciation: row.es_pronunciation,
     esAudioUrl: row.es_audio_url || "",
+    hint: row.hint || "",
     updatedAt: row.updated_at,
   };
 }
