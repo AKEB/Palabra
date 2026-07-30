@@ -562,6 +562,13 @@ async function dbSet<T>(key: string, value: T): Promise<void> {
   });
 }
 
+function mergeListsForLanguage(existing: WordList[], incoming: WordList[], language: LanguageCode) {
+  const kept = existing.filter((list) => listLanguage(list) !== language);
+  const incomingIds = new Set(incoming.map((list) => list.id));
+  const keptWithoutOverlap = kept.filter((list) => !incomingIds.has(list.id));
+  return [...keptWithoutOverlap, ...incoming];
+}
+
 async function api<T>(path: string, token?: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(path, {
     ...init,
@@ -659,7 +666,7 @@ function App() {
 
   useEffect(() => {
     if (token && email && online) sync();
-  }, [token, email, online]);
+  }, [token, email, online, languageCode]);
 
   useEffect(() => {
     if (!("serviceWorker" in navigator)) return;
@@ -703,17 +710,19 @@ function App() {
 
   async function sync(eventsOverride?: ProgressEvent[]) {
     if (!token || !email || !navigator.onLine) return;
+    const syncLanguage = getLanguage(localStorage.getItem(LANGUAGE_STORAGE_KEY)).code;
     setSyncing(true);
     setNotice("");
     try {
-      const previousLists = lists;
       const pending = eventsOverride ?? await dbGet<ProgressEvent[]>(userCacheKey(email, "queue"), queue);
       if (pending.length) {
         await api("/api/sync/progress", token, { method: "POST", body: JSON.stringify({ events: pending }) });
         await persistQueue([]);
       }
-      const data = await api<{ lists: WordList[]; progress: Record<string, Progress>; disabledWordIds: string[]; learnedWordIds: string[]; email: string; user: AuthUser }>("/api/sync", token);
-      await persistLists(data.lists);
+      const data = await api<{ lists: WordList[]; progress: Record<string, Progress>; disabledWordIds: string[]; learnedWordIds: string[]; email: string; user: AuthUser }>(`/api/sync?language=${encodeURIComponent(syncLanguage)}`, token);
+      const cachedLists = await dbGet<WordList[]>(userCacheKey(email, "lists"), lists);
+      const mergedLists = mergeListsForLanguage(cachedLists, data.lists, syncLanguage);
+      await persistLists(mergedLists);
       await persistProgress(mergeProgress(await dbGet<Record<string, Progress>>(userCacheKey(email, "progress"), progress), data.progress));
       await persistDisabledWordIds(data.disabledWordIds ?? []);
       const localLearned = await dbGet<string[]>(userCacheKey(email, "learnedWordIds"), learnedWordIds);
@@ -726,12 +735,11 @@ function App() {
       setEmail(data.email);
       setCurrentUser(data.user);
       localStorage.setItem("palabra-email", data.email);
-      const currentLanguage = getLanguage(localStorage.getItem(LANGUAGE_STORAGE_KEY)).code;
-      const languageDataLists = data.lists.filter((list) => listLanguage(list) === currentLanguage);
+      const languageDataLists = data.lists.filter((list) => listLanguage(list) === syncLanguage);
       setLearnSelectedLists((current) => {
         const validSelected = current.filter((id) => languageDataLists.some((list) => list.id === id));
-        const selectedTitles = previousLists
-          .filter((list) => current.includes(list.id) && listLanguage(list) === currentLanguage)
+        const selectedTitles = cachedLists
+          .filter((list) => current.includes(list.id) && listLanguage(list) === syncLanguage)
           .map((list) => list.title);
         const titleMatched = languageDataLists.filter((list) => selectedTitles.includes(list.title)).map((list) => list.id);
         const nextSelected = validSelected.length ? validSelected : titleMatched.length ? titleMatched : languageDataLists.slice(0, 1).map((list) => list.id);
@@ -740,8 +748,8 @@ function App() {
       });
       setTestSelectedLists((current) => {
         const validSelected = current.filter((id) => languageDataLists.some((list) => list.id === id));
-        const selectedTitles = previousLists
-          .filter((list) => current.includes(list.id) && listLanguage(list) === currentLanguage)
+        const selectedTitles = cachedLists
+          .filter((list) => current.includes(list.id) && listLanguage(list) === syncLanguage)
           .map((list) => list.title);
         const titleMatched = languageDataLists.filter((list) => selectedTitles.includes(list.title)).map((list) => list.id);
         const nextSelected = validSelected.length ? validSelected : titleMatched.length ? titleMatched : languageDataLists.slice(0, 1).map((list) => list.id);

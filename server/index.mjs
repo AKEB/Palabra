@@ -297,7 +297,8 @@ async function handleApi(request, response, url) {
   if (!user) return;
 
   if (request.method === "GET" && url.pathname === "/api/sync") {
-    const data = await getUserData(user.sub);
+    const language = url.searchParams.get("language");
+    const data = await getUserData(user.sub, language ? normalizeLanguage(language) : undefined);
     return sendJson(response, 200, { ...data, email: user.email, user: mapUser(user) });
   }
 
@@ -574,26 +575,28 @@ async function handleApi(request, response, url) {
   sendJson(response, 404, { error: "Не найдено" });
 }
 
-async function getUserData(userId) {
+async function getUserData(userId, language) {
   const listsResult = await pool.query(
     `
       select l.*, u.email as owner_email
       from word_lists l
       join users u on u.id = l.user_id
-      where l.user_id = $1 or l.is_global = true
+      where (l.user_id = $1 or l.is_global = true)
+        and ($2::text is null or l.language = $2)
       order by l.updated_at desc
     `,
-    [userId]
+    [userId, language ?? null]
   );
   const wordsResult = await pool.query(
     `
       select w.*
       from words w
       join word_lists l on l.id = w.list_id
-      where l.user_id = $1 or l.is_global = true
+      where (l.user_id = $1 or l.is_global = true)
+        and ($2::text is null or l.language = $2)
       order by w.updated_at desc
     `,
-    [userId]
+    [userId, language ?? null]
   );
   const progressResult = await pool.query("select * from progress where user_id = $1", [userId]);
   const disabledResult = await pool.query("select word_id from disabled_words where user_id = $1", [userId]);
