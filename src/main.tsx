@@ -1976,6 +1976,8 @@ function Admin({ lists, language, token, online, currentUser, sync, progress, di
 }
 
 function Stats({ lists, progress, queue, learnedWordIds }: { lists: WordList[]; progress: Record<string, Progress>; queue: ProgressEvent[]; learnedWordIds: string[] }) {
+  const [masteryKind, setMasteryKind] = useState<MasteryKind>("oral");
+  const [masteryRank, setMasteryRank] = useState<MasteryRank>("best");
   const words = lists.flatMap((list) => list.words);
   const wordById = useMemo(() => new Map(words.map((word) => [word.id, word])), [words]);
   const learnedInLanguage = useMemo(
@@ -1985,10 +1987,15 @@ function Stats({ lists, progress, queue, learnedWordIds }: { lists: WordList[]; 
   const known = Object.values(progress).filter((item) => wordById.has(item.wordId) && item.knownCount + item.correctCount > 0).length;
   const difficult = Object.values(progress).filter((item) => wordById.has(item.wordId) && item.unknownCount + item.wrongCount > 0).length;
 
-  const oralBest = useMemo(() => rankWordsByMastery(learnedInLanguage, progress, "oral", "best"), [learnedInLanguage, progress]);
-  const oralWorst = useMemo(() => rankWordsByMastery(learnedInLanguage, progress, "oral", "worst"), [learnedInLanguage, progress]);
-  const writtenBest = useMemo(() => rankWordsByMastery(learnedInLanguage, progress, "written", "best"), [learnedInLanguage, progress]);
-  const writtenWorst = useMemo(() => rankWordsByMastery(learnedInLanguage, progress, "written", "worst"), [learnedInLanguage, progress]);
+  const rankedRows = useMemo(
+    () => rankWordsByMastery(learnedInLanguage, progress, masteryKind, masteryRank),
+    [learnedInLanguage, progress, masteryKind, masteryRank]
+  );
+
+  const kindMeta = masteryKind === "oral"
+    ? { title: "Устный тест", description: "Карточки: разница между «знаю» и «не знаю»." }
+    : { title: "Письменный тест", description: "Печать перевода: разница между верными и ошибочными ответами." };
+  const rankTitle = masteryRank === "best" ? "Лучше всего знает" : "Хуже всего знает";
 
   return (
     <section className="stats-page">
@@ -2006,20 +2013,26 @@ function Stats({ lists, progress, queue, learnedWordIds }: { lists: WordList[]; 
         <Metric label="Ждет синхронизации" value={String(queue.length)} />
       </div>
 
-      <div className="stats-rank-sections">
-        <StatsMasteryBlock
-          title="Устный тест"
-          description="Карточки: разница между «знаю» и «не знаю»."
-          best={oralBest}
-          worst={oralWorst}
+      <div className="stats-mastery-block">
+        <div className="stats-mastery-head">
+          <h3>Рейтинг выученных слов</h3>
+          <p>Выберите тип теста и сортировку — список строится только для текущего выбора.</p>
+        </div>
+        <div className="stats-tabs" role="tablist" aria-label="Тип теста">
+          <button type="button" role="tab" className={masteryKind === "oral" ? "active" : ""} aria-selected={masteryKind === "oral"} onClick={() => setMasteryKind("oral")}>Устный</button>
+          <button type="button" role="tab" className={masteryKind === "written" ? "active" : ""} aria-selected={masteryKind === "written"} onClick={() => setMasteryKind("written")}>Письменный</button>
+        </div>
+        <div className="stats-tabs secondary" role="tablist" aria-label="Сортировка рейтинга">
+          <button type="button" role="tab" data-rank="best" className={masteryRank === "best" ? "active" : ""} aria-selected={masteryRank === "best"} onClick={() => setMasteryRank("best")}>Лучше всего</button>
+          <button type="button" role="tab" data-rank="worst" className={masteryRank === "worst" ? "active" : ""} aria-selected={masteryRank === "worst"} onClick={() => setMasteryRank("worst")}>Хуже всего</button>
+        </div>
+        <StatsRankList
+          title={`${kindMeta.title}: ${rankTitle}`}
+          description={kindMeta.description}
+          empty="Пока нет выученных слов."
+          rows={rankedRows}
           wordById={wordById}
-        />
-        <StatsMasteryBlock
-          title="Письменный тест"
-          description="Печать перевода: разница между верными и ошибочными ответами."
-          best={writtenBest}
-          worst={writtenWorst}
-          wordById={wordById}
+          tone={masteryRank}
         />
       </div>
     </section>
@@ -2079,41 +2092,16 @@ function rankWordsByMastery(
   return rows;
 }
 
-function StatsMasteryBlock({
-  title,
-  description,
-  best,
-  worst,
-  wordById,
-}: {
-  title: string;
-  description: string;
-  best: MasteryRow[];
-  worst: MasteryRow[];
-  wordById: Map<string, Word>;
-}) {
-  return (
-    <div className="stats-mastery-block">
-      <div className="stats-mastery-head">
-        <h3>{title}</h3>
-        <p>{description}</p>
-      </div>
-      <div className="stats-mastery-grid">
-        <StatsRankList title="Лучше всего знает" empty="Пока нет выученных слов." rows={best} wordById={wordById} tone="best" />
-        <StatsRankList title="Хуже всего знает" empty="Пока нет выученных слов." rows={worst} wordById={wordById} tone="worst" />
-      </div>
-    </div>
-  );
-}
-
 function StatsRankList({
   title,
+  description,
   empty,
   rows,
   wordById,
   tone,
 }: {
   title: string;
+  description?: string;
   empty: string;
   rows: MasteryRow[];
   wordById: Map<string, Word>;
@@ -2122,6 +2110,7 @@ function StatsRankList({
   return (
     <div className={`stats-rank-card ${tone}`}>
       <h4>{title}</h4>
+      {description && <p className="stats-rank-desc">{description}</p>}
       {!rows.length && <p className="stats-rank-empty">{empty}</p>}
       {!!rows.length && (
         <ol className="stats-rank-list">

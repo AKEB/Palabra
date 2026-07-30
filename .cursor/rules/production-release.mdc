@@ -1,0 +1,34 @@
+---
+description: Production release and deploy workflow for Palabra (git tag → GitHub → gate)
+alwaysApply: true
+---
+
+# Palabra production release
+
+When the user asks to release, ship, or deploy to production, follow this exact flow.
+
+## 1. GitHub release trigger
+
+```bash
+git commit
+git tag
+git push
+```
+
+Push both the branch and the version tag (e.g. `v1.1.9`). That goes to GitHub and starts the worker that builds the Docker image.
+
+## 2. Wait for Docker build
+
+Wait until the GitHub Actions / Docker build for that version finishes successfully before deploying.
+
+## 3. Deploy on gate
+
+```bash
+ssh gate
+cd /root/stacks/palabra
+docker compose pull
+docker compose down
+docker compose up -d
+```
+
+That is the full production rollout. Do not invent alternate deploy paths unless the user asks.
