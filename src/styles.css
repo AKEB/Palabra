@@ -256,6 +256,11 @@ button:disabled {
   overflow-x: hidden;
 }
 
+/* Absolute dropdown must not be clipped when the card shrinks (e.g. after reset). */
+.study-main:has(.list-multiselect.open) {
+  overflow: visible;
+}
+
 select,
 input {
   min-height: 44px;
@@ -838,52 +843,151 @@ select:focus {
   color: #657280;
 }
 
-.language-options {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+.language-switcher:not(.compact) .language-select-wrap {
+  width: 100%;
 }
 
-.language-options button {
+.language-switcher:not(.compact) .language-select-trigger {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 46px;
+  padding: 8px 12px;
+}
+
+.language-select-current {
   display: grid;
-  gap: 2px;
-  min-height: 54px;
-  padding: 8px 10px;
-  border: 1px solid #e2e7eb;
-  border-radius: 10px;
-  background: #fff;
-  color: #4a5563;
+  gap: 1px;
   text-align: left;
 }
 
-.language-options button b {
+.language-select-current b {
   font-size: 0.95rem;
+  line-height: 1.1;
 }
 
-.language-options button small {
+.language-select-current small {
   color: #7a8694;
-  font-size: 0.72rem;
+  font-size: 0.74rem;
+  font-weight: 600;
 }
 
-.language-options button.active {
-  border-color: #ff7a63;
-  background: #fff3ef;
-  color: #c2410c;
+.language-switcher:not(.compact) .language-select-menu {
+  left: 0;
+  right: 0;
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+  max-height: min(52vh, 360px);
+  overflow-y: auto;
 }
 
-.language-options button.active small {
-  color: #d97757;
+.language-select-wrap {
+  position: relative;
+  z-index: 30;
+  flex-shrink: 0;
 }
 
-.language-select {
+.language-select-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   min-height: 34px;
-  width: 88px;
-  padding: 0 32px 0 14px;
-  border-color: #dfe5e9;
+  min-width: 72px;
+  padding: 0 10px 0 12px;
+  border: 1px solid #dfe5e9;
+  border-radius: 8px;
+  background: #fff;
   color: #46515f;
   font-size: 0.9rem;
   font-weight: 850;
-  background-color: #fff;
+}
+
+.language-select-wrap.open .language-select-trigger,
+.language-select-trigger:hover {
+  border-color: #ffb5a9;
+}
+
+.language-select-trigger:focus-visible {
+  outline: 0;
+  border-color: #087d86;
+  box-shadow: 0 0 0 3px rgba(8, 125, 134, 0.12);
+}
+
+.language-select-caret {
+  display: inline-flex;
+  color: #87919c;
+  font-size: 0.78rem;
+  transition: transform 0.15s ease;
+}
+
+.language-select-wrap.open .language-select-caret {
+  transform: rotate(180deg);
+}
+
+.language-select-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 40;
+  display: grid;
+  gap: 4px;
+  min-width: 168px;
+  width: max-content;
+  max-width: min(220px, calc(100vw - 24px));
+  padding: 6px;
+  border: 1px solid #e4e9ed;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 18px 40px rgba(18, 24, 38, 0.14);
+}
+
+.language-select-menu button {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #3e4956;
+  text-align: left;
+}
+
+.language-select-menu button b {
+  font-size: 0.92rem;
+  font-weight: 850;
+}
+
+.language-select-menu button small {
+  color: #75808d;
+  font-size: 0.78rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.language-select-menu button:hover {
+  background: #f4f7f8;
+}
+
+.language-select-menu button.active {
+  background: #fff2ef;
+  color: #c2410c;
+}
+
+.language-select-menu button.active small {
+  color: #d97757;
+}
+
+.language-select-check {
+  color: #ee4937;
+  font-size: 0.85rem;
+  font-weight: 800;
 }
 
 .topbar-tools {
@@ -1491,9 +1595,19 @@ select:focus {
     display: none;
   }
 
-  .mobile-brand .language-select {
-    width: 88px;
-    min-width: 88px;
+  .mobile-brand .language-switcher.compact,
+  .mobile-brand .language-select-wrap {
+    z-index: 35;
+  }
+
+  .mobile-brand .language-select-trigger {
+    min-height: 34px;
+    min-width: 72px;
+  }
+
+  .mobile-brand .language-select-menu {
+    right: 0;
+    left: auto;
   }
 
   .topbar p {

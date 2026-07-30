@@ -12,7 +12,7 @@ type Word = {
   updatedAt?: string;
 };
 
-type LanguageCode = "es" | "en" | "am" | "ge";
+type LanguageCode = "es" | "en" | "am" | "ge" | "pt" | "de" | "ar" | "it" | "zh" | "nl" | "fr" | "sr" | "sk" | "sl" | "pl" | "el";
 
 type WordList = {
   id: string;
@@ -125,6 +125,125 @@ const LANGUAGES: LanguageInfo[] = [
       "ა", "ბ", "გ", "დ", "ე", "ვ", "ზ", "თ", "ი", "კ", "ლ", "მ", "ნ",
       "ო", "პ", "ჟ", "რ", "ს", "ტ", "უ", "ფ", "ქ", "ღ", "ყ", "შ", "ჩ",
       "ც", "ძ", "წ", "ჭ", "ხ", "ჯ", "ჰ",
+    ],
+  },
+  {
+    code: "pt",
+    pair: "RU → PT",
+    short: "PT",
+    name: "Португальский",
+    adjective: "португальском",
+    htmlLang: "pt",
+    keys: ["á", "à", "â", "ã", "ç", "é", "ê", "í", "ó", "ô", "õ", "ú", "ü"],
+  },
+  {
+    code: "de",
+    pair: "RU → DE",
+    short: "DE",
+    name: "Немецкий",
+    adjective: "немецком",
+    htmlLang: "de",
+    keys: ["ä", "ö", "ü", "ß", "Ä", "Ö", "Ü"],
+  },
+  {
+    code: "ar",
+    pair: "RU → AR",
+    short: "AR",
+    name: "Арабский",
+    adjective: "арабском",
+    htmlLang: "ar",
+    keys: [
+      "ا", "أ", "إ", "آ", "ب", "ت", "ث", "ج", "ح", "خ", "د", "ذ", "ر", "ز",
+      "س", "ش", "ص", "ض", "ط", "ظ", "ع", "غ", "ف", "ق", "ك", "ل", "م", "ن",
+      "ه", "و", "ي", "ة", "ى", "ء", "ئ", "ؤ", "لا", "؟", "،",
+    ],
+  },
+  {
+    code: "it",
+    pair: "RU → IT",
+    short: "IT",
+    name: "Итальянский",
+    adjective: "итальянском",
+    htmlLang: "it",
+    keys: ["à", "è", "é", "ì", "ò", "ù"],
+  },
+  {
+    code: "zh",
+    pair: "RU → ZH",
+    short: "ZH",
+    name: "Китайский",
+    adjective: "китайском",
+    htmlLang: "zh",
+    keys: [
+      "ā", "á", "ǎ", "à", "ē", "é", "ě", "è", "ī", "í", "ǐ", "ì",
+      "ō", "ó", "ǒ", "ò", "ū", "ú", "ǔ", "ù", "ǖ", "ǘ", "ǚ", "ǜ", "ü",
+      "、", "。", "？", "！", "，",
+    ],
+  },
+  {
+    code: "nl",
+    pair: "RU → NL",
+    short: "NL",
+    name: "Голландский",
+    adjective: "голландском",
+    htmlLang: "nl",
+    keys: ["á", "é", "í", "ó", "ú", "ä", "ë", "ï", "ö", "ü"],
+  },
+  {
+    code: "fr",
+    pair: "RU → FR",
+    short: "FR",
+    name: "Французский",
+    adjective: "французском",
+    htmlLang: "fr",
+    keys: ["à", "â", "ä", "é", "è", "ê", "ë", "î", "ï", "ô", "ö", "ù", "û", "ü", "ç", "œ", "æ"],
+  },
+  {
+    code: "sr",
+    pair: "RU → SR",
+    short: "SR",
+    name: "Сербский",
+    adjective: "сербском",
+    htmlLang: "sr",
+    keys: ["č", "ć", "đ", "š", "ž", "Č", "Ć", "Đ", "Š", "Ž"],
+  },
+  {
+    code: "sk",
+    pair: "RU → SK",
+    short: "SK",
+    name: "Словацкий",
+    adjective: "словацком",
+    htmlLang: "sk",
+    keys: ["á", "ä", "č", "ď", "é", "í", "ĺ", "ľ", "ň", "ó", "ô", "ŕ", "š", "ť", "ú", "ý", "ž"],
+  },
+  {
+    code: "sl",
+    pair: "RU → SL",
+    short: "SL",
+    name: "Словенский",
+    adjective: "словенском",
+    htmlLang: "sl",
+    keys: ["č", "š", "ž", "Č", "Š", "Ž", "á", "é", "í", "ó", "ú"],
+  },
+  {
+    code: "pl",
+    pair: "RU → PL",
+    short: "PL",
+    name: "Польский",
+    adjective: "польском",
+    htmlLang: "pl",
+    keys: ["ą", "ć", "ę", "ł", "ń", "ó", "ś", "ź", "ż"],
+  },
+  {
+    code: "el",
+    pair: "RU → EL",
+    short: "EL",
+    name: "Греческий",
+    adjective: "греческом",
+    htmlLang: "el",
+    keys: [
+      "α", "ά", "β", "γ", "δ", "ε", "έ", "ζ", "η", "ή", "θ", "ι", "ί", "κ", "λ", "μ",
+      "ν", "ξ", "ο", "ό", "π", "ρ", "σ", "ς", "τ", "υ", "ύ", "φ", "χ", "ψ", "ω", "ώ",
     ],
   },
 ];
@@ -1116,7 +1235,12 @@ function Test({ lists, language, selectedLists, setSelectedLists, mode, setMode,
     event.preventDefault();
     if (!current) return;
     const expected = mode === "type-ru-es" ? current.es : current.ru;
-    if (normalizeAnswer(answer) === normalizeAnswer(expected)) {
+    const normalized = normalizeAnswer(answer);
+    const accepted = [expected];
+    if (mode === "type-ru-es" && (language.code === "zh" || language.code === "ar" || language.code === "el") && current.esPronunciation) {
+      accepted.push(current.esPronunciation);
+    }
+    if (accepted.some((item) => normalizeAnswer(item) === normalized)) {
       setFeedback(`Верно: ${expected}`);
       window.setTimeout(nextKnown, 450);
     } else {
@@ -2035,40 +2159,71 @@ function LanguageSwitcher({ language, setLanguage, compact = false }: {
   setLanguage: (code: LanguageCode) => void;
   compact?: boolean;
 }) {
-  if (compact) {
-    return (
-      <select
-        className="language-select"
-        value={language.code}
-        onChange={(event) => setLanguage(event.target.value as LanguageCode)}
-        aria-label="Язык обучения"
-      >
-        {LANGUAGES.map((item) => (
-          <option key={item.code} value={item.code}>
-            {item.short}
-          </option>
-        ))}
-      </select>
-    );
-  }
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
 
   return (
-    <div className="language-switcher" role="group" aria-label="Язык обучения">
-      <span className="language-label">Язык</span>
-      <div className="language-options">
-        {LANGUAGES.map((item) => (
-          <button
-            key={item.code}
-            type="button"
-            className={item.code === language.code ? "active" : ""}
-            onClick={() => setLanguage(item.code)}
-            title={`${item.name} (${item.pair})`}
-            aria-pressed={item.code === language.code}
-          >
-            <b>{item.short}</b>
-            <small>{item.name}</small>
-          </button>
-        ))}
+    <div className={`language-switcher ${compact ? "compact" : ""}`} ref={rootRef}>
+      {!compact && <span className="language-label">Язык</span>}
+      <div className={`language-select-wrap ${open ? "open" : ""}`}>
+        <button
+          type="button"
+          className="language-select-trigger"
+          onClick={() => setOpen((value) => !value)}
+          aria-expanded={open}
+          aria-haspopup="listbox"
+          aria-label="Язык обучения"
+        >
+          {compact ? (
+            <span>{language.short}</span>
+          ) : (
+            <span className="language-select-current">
+              <b>{language.short}</b>
+              <small>{language.name}</small>
+            </span>
+          )}
+          <span className="language-select-caret" aria-hidden>▾</span>
+        </button>
+        {open && (
+          <div className="language-select-menu" role="listbox" aria-label="Язык обучения">
+            {LANGUAGES.map((item) => {
+              const active = item.code === language.code;
+              return (
+                <button
+                  key={item.code}
+                  type="button"
+                  role="option"
+                  aria-selected={active}
+                  className={active ? "active" : ""}
+                  onClick={() => {
+                    setLanguage(item.code);
+                    setOpen(false);
+                  }}
+                >
+                  <b>{item.short}</b>
+                  <small>{item.name}</small>
+                  {active && <span className="language-select-check" aria-hidden>✓</span>}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );

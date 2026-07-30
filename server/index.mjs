@@ -10,7 +10,10 @@ const JWT_SECRET = process.env.JWT_SECRET || "dev-secret-change-me";
 const DATABASE_URL = process.env.DATABASE_URL || "postgres://palabra:palabra@localhost:5432/palabra";
 const publicDir = join(process.cwd(), "dist");
 const flashcardoSeedPath = join(process.cwd(), "data", "flashcardo-topics.json");
-const SUPPORTED_LANGUAGES = new Set(["es", "en", "am", "ge"]);
+const SUPPORTED_LANGUAGES = new Set([
+  "es", "en", "am", "ge", "pt", "de", "ar", "it", "zh",
+  "nl", "fr", "sr", "sk", "sl", "pl", "el",
+]);
 
 const pool = new Pool({ connectionString: DATABASE_URL });
 

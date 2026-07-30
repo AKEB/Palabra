@@ -1,6 +1,6 @@
 # Palabra
 
-Palabra is an offline-first PWA for learning words and phrases from Russian into Spanish, English, Armenian, or Georgian. It includes a server-backed account, word lists, admin panel, and progress sync.
+Palabra is an offline-first PWA for learning words and phrases from Russian into other languages. It includes a server-backed account, word lists, admin panel, and progress sync.
 
 ## Languages
 
@@ -10,8 +10,20 @@ Switch languages anytime in the sidebar (desktop) or top bar (mobile):
 - `RU → EN` English
 - `RU → AM` Armenian
 - `RU → GE` Georgian
+- `RU → PT` Portuguese
+- `RU → DE` German
+- `RU → AR` Arabic
+- `RU → IT` Italian
+- `RU → ZH` Chinese
+- `RU → NL` Dutch
+- `RU → FR` French
+- `RU → SR` Serbian
+- `RU → SK` Slovak
+- `RU → SL` Slovenian
+- `RU → PL` Polish
+- `RU → EL` Greek
 
-Topic flashcards are imported from [Flashcardo](https://flashcardo.com/ru/ispanskiye-kartochki/) (and the matching English / Armenian / Georgian pages).
+Topic flashcards are imported from [Flashcardo](https://flashcardo.com/ru/ispanskiye-kartochki/) and the matching pages for each language.
 
 ## Local run
 
@@ -21,10 +33,11 @@ docker compose up --build
 
 Open `http://localhost:8080`.
 
-Refresh Flashcardo seed data:
+Refresh Flashcardo seed data and audio:
 
 ```bash
 npm run fetch:flashcardo
+npm run fetch:audio
 ```
 
 ## Docker Hub
