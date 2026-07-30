@@ -19,6 +19,8 @@ services:
       POSTGRES_USER: palabra
       POSTGRES_PASSWORD: palabra
       POSTGRES_DB: palabra
+    ports:
+      - "${DB_PORT:-5432}:5432"
     volumes:
       - palabra-postgres:/var/lib/postgresql/data
     healthcheck:

@@ -17,6 +17,15 @@ self.addEventListener("fetch", (event) => {
   const request = event.request;
   const url = new URL(request.url);
   if (url.pathname.startsWith("/api")) return;
+  // Never cache Vite/dev module graph — stale entries cause a blank page.
+  if (
+    url.pathname.startsWith("/@") ||
+    url.pathname.startsWith("/src/") ||
+    url.pathname.startsWith("/node_modules/") ||
+    url.pathname.includes(".vite")
+  ) {
+    return;
+  }
   if (request.mode === "navigate") {
     event.respondWith(fetch(request).catch(() => caches.match("/")));
     return;

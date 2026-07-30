@@ -9,6 +9,7 @@
     "fetch:flashcardo": "python3 scripts/fetch-flashcardo.py",
     "fetch:audio": "node scripts/download-flashcardo-audio.mjs",
     "dev": "vite --host 0.0.0.0",
+    "dev:local": "bash scripts/dev.sh",
     "build": "vite build",
     "start": "node server/index.mjs",
     "test": "npm run build",

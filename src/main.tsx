@@ -632,7 +632,18 @@ function App() {
   }, [token, email, online]);
 
   useEffect(() => {
-    if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => undefined);
+    if (!("serviceWorker" in navigator)) return;
+    if (import.meta.env.DEV) {
+      // SW cache-first breaks Vite HMR and can leave a blank screen.
+      navigator.serviceWorker.getRegistrations().then((regs) => {
+        regs.forEach((reg) => reg.unregister());
+      });
+      caches.keys().then((keys) => {
+        keys.forEach((key) => caches.delete(key));
+      });
+      return;
+    }
+    navigator.serviceWorker.register("/sw.js").catch(() => undefined);
   }, []);
 
   async function persistLists(next: WordList[]) {
@@ -1966,10 +1977,21 @@ function Admin({ lists, language, token, online, currentUser, sync, progress, di
 
 function Stats({ lists, progress, queue, learnedWordIds }: { lists: WordList[]; progress: Record<string, Progress>; queue: ProgressEvent[]; learnedWordIds: string[] }) {
   const words = lists.flatMap((list) => list.words);
-  const known = Object.values(progress).filter((item) => item.knownCount + item.correctCount > 0).length;
-  const difficult = Object.values(progress).filter((item) => item.unknownCount + item.wrongCount > 0).length;
+  const wordById = useMemo(() => new Map(words.map((word) => [word.id, word])), [words]);
+  const learnedInLanguage = useMemo(
+    () => learnedWordIds.filter((id) => wordById.has(id)),
+    [learnedWordIds, wordById]
+  );
+  const known = Object.values(progress).filter((item) => wordById.has(item.wordId) && item.knownCount + item.correctCount > 0).length;
+  const difficult = Object.values(progress).filter((item) => wordById.has(item.wordId) && item.unknownCount + item.wrongCount > 0).length;
+
+  const oralBest = useMemo(() => rankWordsByMastery(learnedInLanguage, progress, "oral", "best"), [learnedInLanguage, progress]);
+  const oralWorst = useMemo(() => rankWordsByMastery(learnedInLanguage, progress, "oral", "worst"), [learnedInLanguage, progress]);
+  const writtenBest = useMemo(() => rankWordsByMastery(learnedInLanguage, progress, "written", "best"), [learnedInLanguage, progress]);
+  const writtenWorst = useMemo(() => rankWordsByMastery(learnedInLanguage, progress, "written", "worst"), [learnedInLanguage, progress]);
+
   return (
-    <section>
+    <section className="stats-page">
       <div className="section-head">
         <div>
           <p className="eyebrow">Статистика</p>
@@ -1978,12 +2000,153 @@ function Stats({ lists, progress, queue, learnedWordIds }: { lists: WordList[]; 
       </div>
       <div className="stats-grid">
         <Metric label="Всего слов" value={String(words.length)} />
-        <Metric label="Выучено" value={String(learnedWordIds.length)} />
+        <Metric label="Выучено" value={String(learnedInLanguage.length)} />
         <Metric label="Есть успех в тестах" value={String(known)} />
         <Metric label="Повторить" value={String(difficult)} />
         <Metric label="Ждет синхронизации" value={String(queue.length)} />
       </div>
+
+      <div className="stats-rank-sections">
+        <StatsMasteryBlock
+          title="Устный тест"
+          description="Карточки: разница между «знаю» и «не знаю»."
+          best={oralBest}
+          worst={oralWorst}
+          wordById={wordById}
+        />
+        <StatsMasteryBlock
+          title="Письменный тест"
+          description="Печать перевода: разница между верными и ошибочными ответами."
+          best={writtenBest}
+          worst={writtenWorst}
+          wordById={wordById}
+        />
+      </div>
     </section>
+  );
+}
+
+type MasteryKind = "oral" | "written";
+type MasteryRank = "best" | "worst";
+
+type MasteryRow = {
+  wordId: string;
+  correct: number;
+  wrong: number;
+  gap: number;
+};
+
+function masteryCounts(item: Progress | undefined, kind: MasteryKind) {
+  if (kind === "oral") {
+    return {
+      correct: item?.masteryOralCorrect ?? 0,
+      wrong: item?.masteryOralWrong ?? 0,
+    };
+  }
+  return {
+    correct: item?.masteryWrittenCorrect ?? 0,
+    wrong: item?.masteryWrittenWrong ?? 0,
+  };
+}
+
+function rankWordsByMastery(
+  wordIds: string[],
+  progress: Record<string, Progress>,
+  kind: MasteryKind,
+  rank: MasteryRank
+): MasteryRow[] {
+  const rows = wordIds.map((wordId) => {
+    const counts = masteryCounts(progress[wordId], kind);
+    return {
+      wordId,
+      correct: counts.correct,
+      wrong: counts.wrong,
+      gap: counts.correct - counts.wrong,
+    };
+  });
+
+  rows.sort((left, right) => {
+    if (rank === "best") {
+      if (right.gap !== left.gap) return right.gap - left.gap;
+      if (right.correct !== left.correct) return right.correct - left.correct;
+      return left.wrong - right.wrong;
+    }
+    if (left.gap !== right.gap) return left.gap - right.gap;
+    if (right.wrong !== left.wrong) return right.wrong - left.wrong;
+    return left.correct - right.correct;
+  });
+
+  return rows;
+}
+
+function StatsMasteryBlock({
+  title,
+  description,
+  best,
+  worst,
+  wordById,
+}: {
+  title: string;
+  description: string;
+  best: MasteryRow[];
+  worst: MasteryRow[];
+  wordById: Map<string, Word>;
+}) {
+  return (
+    <div className="stats-mastery-block">
+      <div className="stats-mastery-head">
+        <h3>{title}</h3>
+        <p>{description}</p>
+      </div>
+      <div className="stats-mastery-grid">
+        <StatsRankList title="Лучше всего знает" empty="Пока нет выученных слов." rows={best} wordById={wordById} tone="best" />
+        <StatsRankList title="Хуже всего знает" empty="Пока нет выученных слов." rows={worst} wordById={wordById} tone="worst" />
+      </div>
+    </div>
+  );
+}
+
+function StatsRankList({
+  title,
+  empty,
+  rows,
+  wordById,
+  tone,
+}: {
+  title: string;
+  empty: string;
+  rows: MasteryRow[];
+  wordById: Map<string, Word>;
+  tone: "best" | "worst";
+}) {
+  return (
+    <div className={`stats-rank-card ${tone}`}>
+      <h4>{title}</h4>
+      {!rows.length && <p className="stats-rank-empty">{empty}</p>}
+      {!!rows.length && (
+        <ol className="stats-rank-list">
+          {rows.map((row, index) => {
+            const word = wordById.get(row.wordId);
+            if (!word) return null;
+            const gapLabel = row.gap > 0 ? `+${row.gap}` : String(row.gap);
+            return (
+              <li key={row.wordId}>
+                <span className="stats-rank-index">{index + 1}</span>
+                <div className="stats-rank-word">
+                  <b>{word.ru}</b>
+                  <small>{word.es}</small>
+                </div>
+                <div className="stats-rank-score">
+                  <span className="ok">✓ {row.correct}</span>
+                  <span className="bad">× {row.wrong}</span>
+                  <span className={`gap ${row.gap >= 0 ? "positive" : "negative"}`}>{gapLabel}</span>
+                </div>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+    </div>
   );
 }
 

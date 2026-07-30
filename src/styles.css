@@ -1466,6 +1466,156 @@ select:focus {
   gap: 16px;
 }
 
+.stats-page {
+  display: grid;
+  gap: 22px;
+}
+
+.stats-rank-sections {
+  display: grid;
+  gap: 22px;
+}
+
+.stats-mastery-block {
+  display: grid;
+  gap: 14px;
+}
+
+.stats-mastery-head h3 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.stats-mastery-head p {
+  margin: 4px 0 0;
+  color: #687583;
+  font-size: 0.92rem;
+}
+
+.stats-mastery-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.stats-rank-card {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid #e6eaee;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 12px 28px rgba(18, 24, 38, 0.05);
+}
+
+.stats-rank-card h4 {
+  margin: 0;
+  font-size: 0.98rem;
+}
+
+.stats-rank-card.best h4 {
+  color: #0f766e;
+}
+
+.stats-rank-card.worst h4 {
+  color: #c2410c;
+}
+
+.stats-rank-empty {
+  margin: 0;
+  color: #7a8694;
+  font-size: 0.9rem;
+}
+
+.stats-rank-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.stats-rank-list li {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #f7f9fa;
+}
+
+.stats-rank-index {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: #eef2f4;
+  color: #5c6876;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.stats-rank-word {
+  min-width: 0;
+}
+
+.stats-rank-word b,
+.stats-rank-word small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stats-rank-word small {
+  margin-top: 2px;
+  color: #75808d;
+  font-size: 0.82rem;
+}
+
+.stats-rank-score {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.stats-rank-score span {
+  min-width: 34px;
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: #eef2f4;
+  color: #5c6876;
+  font-size: 0.76rem;
+  font-weight: 750;
+  text-align: center;
+}
+
+.stats-rank-score .ok {
+  background: #e8f6ef;
+  color: #07684e;
+}
+
+.stats-rank-score .bad {
+  background: #fff0ec;
+  color: #9d3d2f;
+}
+
+.stats-rank-score .gap.positive {
+  background: #e8f6ef;
+  color: #0f766e;
+}
+
+.stats-rank-score .gap.negative {
+  background: #fff0ec;
+  color: #c2410c;
+}
+
 .auth-screen {
   display: grid;
   place-items: center;
@@ -1617,9 +1767,20 @@ select:focus {
   .study-grid,
   .admin-grid,
   .stats-grid,
-  .admin-users-grid {
+  .admin-users-grid,
+  .stats-mastery-grid {
     grid-template-columns: minmax(0, 1fr);
     width: 100%;
+  }
+
+  .stats-rank-list li {
+    grid-template-columns: 24px minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .stats-rank-score {
+    grid-column: 2;
+    justify-content: flex-start;
   }
 
   .study-side {

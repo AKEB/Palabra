@@ -27,11 +27,21 @@ Topic flashcards are imported from [Flashcardo](https://flashcardo.com/ru/ispans
 
 ## Local run
 
+Production-like (Docker):
+
 ```bash
 docker compose up --build
 ```
 
 Open `http://localhost:8080`.
+
+Dev with hot reload (Postgres + API + Vite):
+
+```bash
+npm run dev:local
+```
+
+Open `http://localhost:5173`. Postgres is mapped to host port `5433` by default (`DB_PORT` to override). Ctrl+C stops API and Vite; the DB container stays up.
 
 Refresh Flashcardo seed data and audio:
 
