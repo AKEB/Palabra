@@ -18,16 +18,13 @@ jobs:
         include:
           - platform: linux/amd64
             suffix: amd64
-            qemu: false
+            runner: ubuntu-latest
           - platform: linux/arm64
             suffix: arm64
-            qemu: true
-    runs-on: ubuntu-latest
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
-
-      - uses: docker/setup-qemu-action@v3
-        if: matrix.qemu
 
       - uses: docker/setup-buildx-action@v3
 
@@ -46,8 +43,8 @@ jobs:
           tags: akeb/palabra:${{ github.ref_name }}-${{ matrix.suffix }}
           build-args: |
             SERVER_VERSION=${{ github.ref_name }}
-          cache-from: type=gha,scope=${{ github.ref_name }}-${{ matrix.suffix }}
-          cache-to: type=gha,mode=max,scope=${{ github.ref_name }}-${{ matrix.suffix }}
+          cache-from: type=gha,scope=palabra-${{ matrix.suffix }}
+          cache-to: type=gha,mode=max,scope=palabra-${{ matrix.suffix }}
 
   merge:
     needs: build
@@ -67,6 +64,3 @@ jobs:
             -t akeb/palabra:latest \
             akeb/palabra:${{ github.ref_name }}-amd64 \
             akeb/palabra:${{ github.ref_name }}-arm64
-
-
-
